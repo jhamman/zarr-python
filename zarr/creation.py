@@ -1,11 +1,14 @@
-from typing import Optional
+from typing import Optional, Dict, Any, Iterable
 from warnings import warn
 
 import numpy as np
 from numcodecs.registry import codec_registry
 
+from zarrita import Array, ArrayV2, Group, GroupV2
+
 from zarr._storage.store import DEFAULT_ZARR_VERSION
-from zarr.core import Array
+
+# from zarr.core import Array
 from zarr.errors import (
     ArrayNotFoundError,
     ContainsArrayError,
@@ -45,192 +48,258 @@ def create(
     zarr_version=None,
     meta_array=None,
     storage_transformers=(),
+    dimension_names: Optional[Iterable[str]] = None,
+    attributes: Optional[Dict[str, Any]] = None,
     **kwargs,
 ):
-    """Create an array.
 
-    Parameters
-    ----------
-    shape : int or tuple of ints
-        Array shape.
-    chunks : int or tuple of ints, optional
-        Chunk shape. If True, will be guessed from `shape` and `dtype`. If
-        False, will be set to `shape`, i.e., single chunk for the whole array.
-        If an int, the chunk size in each dimension will be given by the value
-        of `chunks`. Default is True.
-    dtype : string or dtype, optional
-        NumPy dtype.
-    compressor : Codec, optional
-        Primary compressor.
-    fill_value : object
-        Default value to use for uninitialized portions of the array.
-    order : {'C', 'F'}, optional
-        Memory layout to be used within each chunk.
-    store : MutableMapping or string
-        Store or path to directory in file system or name of zip file.
-    synchronizer : object, optional
-        Array synchronizer.
-    overwrite : bool, optional
-        If True, delete all pre-existing data in `store` at `path` before
-        creating the array.
-    path : string, optional
-        Path under which array is stored.
-    chunk_store : MutableMapping, optional
-        Separate storage for chunks. If not provided, `store` will be used
-        for storage of both chunks and metadata.
-    filters : sequence of Codecs, optional
-        Sequence of filters to use to encode chunk data prior to compression.
-    cache_metadata : bool, optional
-        If True, array configuration metadata will be cached for the
-        lifetime of the object. If False, array metadata will be reloaded
-        prior to all data access and modification operations (may incur
-        overhead depending on storage and data access pattern).
-    cache_attrs : bool, optional
-        If True (default), user attributes will be cached for attribute read
-        operations. If False, user attributes are reloaded from the store prior
-        to all attribute read operations.
-    read_only : bool, optional
-        True if array should be protected against modification.
-    object_codec : Codec, optional
-        A codec to encode object arrays, only needed if dtype=object.
-    dimension_separator : {'.', '/'}, optional
-        Separator placed between the dimensions of a chunk.
-
-        .. versionadded:: 2.8
-
-    write_empty_chunks : bool, optional
-        If True (default), all chunks will be stored regardless of their
-        contents. If False, each chunk is compared to the array's fill value
-        prior to storing. If a chunk is uniformly equal to the fill value, then
-        that chunk is not be stored, and the store entry for that chunk's key
-        is deleted. This setting enables sparser storage, as only chunks with
-        non-fill-value data are stored, at the expense of overhead associated
-        with checking the data of each chunk.
-
-        .. versionadded:: 2.11
-
-    storage_transformers : sequence of StorageTransformers, optional
-        Setting storage transformers, changes the storage structure and behaviour
-        of data coming from the underlying store. The transformers are applied in the
-        order of the given sequence. Supplying an empty sequence is the same as omitting
-        the argument or setting it to None. May only be set when using zarr_version 3.
-
-        .. versionadded:: 2.13
-
-    zarr_version : {None, 2, 3}, optional
-        The zarr protocol version of the created array. If None, it will be
-        inferred from ``store`` or ``chunk_store`` if they are provided,
-        otherwise defaulting to 2.
-
-        .. versionadded:: 2.12
-
-    meta_array : array-like, optional
-        An array instance to use for determining arrays to create and return
-        to users. Use `numpy.empty(())` by default.
-
-        .. versionadded:: 2.13
-
-    Returns
-    -------
-    z : zarr.core.Array
-
-    Examples
-    --------
-
-    Create an array with default settings::
-
-        >>> import zarr
-        >>> z = zarr.create((10000, 10000), chunks=(1000, 1000))
-        >>> z
-        <zarr.core.Array (10000, 10000) float64>
-
-    Create an array with different some different configuration options::
-
-        >>> from numcodecs import Blosc
-        >>> compressor = Blosc(cname='zstd', clevel=1, shuffle=Blosc.BITSHUFFLE)
-        >>> z = zarr.create((10000, 10000), chunks=(1000, 1000), dtype='i1', order='F',
-        ...                 compressor=compressor)
-        >>> z
-        <zarr.core.Array (10000, 10000) int8>
-
-    To create an array with object dtype requires a filter that can handle Python object
-    encoding, e.g., `MsgPack` or `Pickle` from `numcodecs`::
-
-        >>> from numcodecs import MsgPack
-        >>> z = zarr.create((10000, 10000), chunks=(1000, 1000), dtype=object,
-        ...                 object_codec=MsgPack())
-        >>> z
-        <zarr.core.Array (10000, 10000) object>
-
-    Example with some filters, and also storing chunks separately from metadata::
-
-        >>> from numcodecs import Quantize, Adler32
-        >>> store, chunk_store = dict(), dict()
-        >>> z = zarr.create((10000, 10000), chunks=(1000, 1000), dtype='f8',
-        ...                 filters=[Quantize(digits=2, dtype='f8'), Adler32()],
-        ...                 store=store, chunk_store=chunk_store)
-        >>> z
-        <zarr.core.Array (10000, 10000) float64>
-
-    """
-    if zarr_version is None and store is None:
-        zarr_version = getattr(chunk_store, "_store_version", DEFAULT_ZARR_VERSION)
-
-    # handle polymorphic store arg
-    store = normalize_store_arg(store, zarr_version=zarr_version, mode="w")
-    zarr_version = getattr(store, "_store_version", DEFAULT_ZARR_VERSION)
-
-    # API compatibility with h5py
-    compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
-
-    # optional array metadata
-    if dimension_separator is None:
-        dimension_separator = getattr(store, "_dimension_separator", None)
+    if zarr_version == 2:
+        array = ArrayV2.create(
+            store=store,
+            shape=shape,
+            dtype=dtype,
+            chunks=chunks,
+            dimension_separator=dimension_separator,
+            fill_value=fill_value,
+            order=order,
+            filters=filters,
+            compressor=compressor,
+            attributes=attributes,
+            # exists_ok: bool = False,
+        )
     else:
-        store_separator = getattr(store, "_dimension_separator", None)
-        if store_separator not in (None, dimension_separator):
-            raise ValueError(
-                f"Specified dimension_separator: {dimension_separator}"
-                f"conflicts with store's separator: "
-                f"{store_separator}"
-            )
-    dimension_separator = normalize_dimension_separator(dimension_separator)
+        chunk_key_encoding = kwargs.pop("chunk_key_encoding", ("default", "/"))
+        codecs = kwargs.pop("codecs", [])
 
-    if zarr_version > 2 and path is None:
-        path = "/"
+        if compressor is not None:
+            raise ValueError("compressor is not supported in v3, use codecs instead")
+        if filters is not None:
+            raise ValueError("filters are not supported in v3, use codecs instead")
 
-    # initialize array metadata
-    init_array(
-        store,
-        shape=shape,
-        chunks=chunks,
-        dtype=dtype,
-        compressor=compressor,
-        fill_value=fill_value,
-        order=order,
-        overwrite=overwrite,
-        path=path,
-        chunk_store=chunk_store,
-        filters=filters,
-        object_codec=object_codec,
-        dimension_separator=dimension_separator,
-        storage_transformers=storage_transformers,
-    )
+        array = Array.create(
+            store=store,
+            shape=shape,
+            dtype=dtype,
+            chunk_shape=chunks,
+            fill_value=fill_value,
+            chunk_key_encoding=chunk_key_encoding,
+            codecs=codecs,
+            dimension_names=dimension_names,
+            attributes=attributes,
+        )
 
-    # instantiate array
-    z = Array(
-        store,
-        path=path,
-        chunk_store=chunk_store,
-        synchronizer=synchronizer,
-        cache_metadata=cache_metadata,
-        cache_attrs=cache_attrs,
-        read_only=read_only,
-        write_empty_chunks=write_empty_chunks,
-        meta_array=meta_array,
-    )
+    return array
 
-    return z
+
+# def create(
+#     shape,
+#     chunks=True,
+#     dtype=None,
+#     compressor="default",
+#     fill_value: Optional[int] = 0,
+#     order="C",
+#     store=None,
+#     synchronizer=None,
+#     overwrite=False,
+#     path=None,
+#     chunk_store=None,
+#     filters=None,
+#     cache_metadata=True,
+#     cache_attrs=True,
+#     read_only=False,
+#     object_codec=None,
+#     dimension_separator=None,
+#     write_empty_chunks=True,
+#     *,
+#     zarr_version=None,
+#     meta_array=None,
+#     storage_transformers=(),
+#     **kwargs,
+# ):
+#     """Create an array.
+
+#     Parameters
+#     ----------
+#     shape : int or tuple of ints
+#         Array shape.
+#     chunks : int or tuple of ints, optional
+#         Chunk shape. If True, will be guessed from `shape` and `dtype`. If
+#         False, will be set to `shape`, i.e., single chunk for the whole array.
+#         If an int, the chunk size in each dimension will be given by the value
+#         of `chunks`. Default is True.
+#     dtype : string or dtype, optional
+#         NumPy dtype.
+#     compressor : Codec, optional
+#         Primary compressor.
+#     fill_value : object
+#         Default value to use for uninitialized portions of the array.
+#     order : {'C', 'F'}, optional
+#         Memory layout to be used within each chunk.
+#     store : MutableMapping or string
+#         Store or path to directory in file system or name of zip file.
+#     synchronizer : object, optional
+#         Array synchronizer.
+#     overwrite : bool, optional
+#         If True, delete all pre-existing data in `store` at `path` before
+#         creating the array.
+#     path : string, optional
+#         Path under which array is stored.
+#     chunk_store : MutableMapping, optional
+#         Separate storage for chunks. If not provided, `store` will be used
+#         for storage of both chunks and metadata.
+#     filters : sequence of Codecs, optional
+#         Sequence of filters to use to encode chunk data prior to compression.
+#     cache_metadata : bool, optional
+#         If True, array configuration metadata will be cached for the
+#         lifetime of the object. If False, array metadata will be reloaded
+#         prior to all data access and modification operations (may incur
+#         overhead depending on storage and data access pattern).
+#     cache_attrs : bool, optional
+#         If True (default), user attributes will be cached for attribute read
+#         operations. If False, user attributes are reloaded from the store prior
+#         to all attribute read operations.
+#     read_only : bool, optional
+#         True if array should be protected against modification.
+#     object_codec : Codec, optional
+#         A codec to encode object arrays, only needed if dtype=object.
+#     dimension_separator : {'.', '/'}, optional
+#         Separator placed between the dimensions of a chunk.
+
+#         .. versionadded:: 2.8
+
+#     write_empty_chunks : bool, optional
+#         If True (default), all chunks will be stored regardless of their
+#         contents. If False, each chunk is compared to the array's fill value
+#         prior to storing. If a chunk is uniformly equal to the fill value, then
+#         that chunk is not be stored, and the store entry for that chunk's key
+#         is deleted. This setting enables sparser storage, as only chunks with
+#         non-fill-value data are stored, at the expense of overhead associated
+#         with checking the data of each chunk.
+
+#         .. versionadded:: 2.11
+
+#     storage_transformers : sequence of StorageTransformers, optional
+#         Setting storage transformers, changes the storage structure and behaviour
+#         of data coming from the underlying store. The transformers are applied in the
+#         order of the given sequence. Supplying an empty sequence is the same as omitting
+#         the argument or setting it to None. May only be set when using zarr_version 3.
+
+#         .. versionadded:: 2.13
+
+#     zarr_version : {None, 2, 3}, optional
+#         The zarr protocol version of the created array. If None, it will be
+#         inferred from ``store`` or ``chunk_store`` if they are provided,
+#         otherwise defaulting to 2.
+
+#         .. versionadded:: 2.12
+
+#     meta_array : array-like, optional
+#         An array instance to use for determining arrays to create and return
+#         to users. Use `numpy.empty(())` by default.
+
+#         .. versionadded:: 2.13
+
+#     Returns
+#     -------
+#     z : zarr.core.Array
+
+#     Examples
+#     --------
+
+#     Create an array with default settings::
+
+#         >>> import zarr
+#         >>> z = zarr.create((10000, 10000), chunks=(1000, 1000))
+#         >>> z
+#         <zarr.core.Array (10000, 10000) float64>
+
+#     Create an array with different some different configuration options::
+
+#         >>> from numcodecs import Blosc
+#         >>> compressor = Blosc(cname='zstd', clevel=1, shuffle=Blosc.BITSHUFFLE)
+#         >>> z = zarr.create((10000, 10000), chunks=(1000, 1000), dtype='i1', order='F',
+#         ...                 compressor=compressor)
+#         >>> z
+#         <zarr.core.Array (10000, 10000) int8>
+
+#     To create an array with object dtype requires a filter that can handle Python object
+#     encoding, e.g., `MsgPack` or `Pickle` from `numcodecs`::
+
+#         >>> from numcodecs import MsgPack
+#         >>> z = zarr.create((10000, 10000), chunks=(1000, 1000), dtype=object,
+#         ...                 object_codec=MsgPack())
+#         >>> z
+#         <zarr.core.Array (10000, 10000) object>
+
+#     Example with some filters, and also storing chunks separately from metadata::
+
+#         >>> from numcodecs import Quantize, Adler32
+#         >>> store, chunk_store = dict(), dict()
+#         >>> z = zarr.create((10000, 10000), chunks=(1000, 1000), dtype='f8',
+#         ...                 filters=[Quantize(digits=2, dtype='f8'), Adler32()],
+#         ...                 store=store, chunk_store=chunk_store)
+#         >>> z
+#         <zarr.core.Array (10000, 10000) float64>
+
+#     """
+#     if zarr_version is None and store is None:
+#         zarr_version = getattr(chunk_store, "_store_version", DEFAULT_ZARR_VERSION)
+
+#     # handle polymorphic store arg
+#     store = normalize_store_arg(store, zarr_version=zarr_version, mode="w")
+#     zarr_version = getattr(store, "_store_version", DEFAULT_ZARR_VERSION)
+
+#     # API compatibility with h5py
+#     compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+
+#     # optional array metadata
+#     if dimension_separator is None:
+#         dimension_separator = getattr(store, "_dimension_separator", None)
+#     else:
+#         store_separator = getattr(store, "_dimension_separator", None)
+#         if store_separator not in (None, dimension_separator):
+#             raise ValueError(
+#                 f"Specified dimension_separator: {dimension_separator}"
+#                 f"conflicts with store's separator: "
+#                 f"{store_separator}"
+#             )
+#     dimension_separator = normalize_dimension_separator(dimension_separator)
+
+#     if zarr_version > 2 and path is None:
+#         path = "/"
+
+#     # initialize array metadata
+#     init_array(
+#         store,
+#         shape=shape,
+#         chunks=chunks,
+#         dtype=dtype,
+#         compressor=compressor,
+#         fill_value=fill_value,
+#         order=order,
+#         overwrite=overwrite,
+#         path=path,
+#         chunk_store=chunk_store,
+#         filters=filters,
+#         object_codec=object_codec,
+#         dimension_separator=dimension_separator,
+#         storage_transformers=storage_transformers,
+#     )
+
+#     # instantiate array
+#     z = Array(
+#         store,
+#         path=path,
+#         chunk_store=chunk_store,
+#         synchronizer=synchronizer,
+#         cache_metadata=cache_metadata,
+#         cache_attrs=cache_attrs,
+#         read_only=read_only,
+#         write_empty_chunks=write_empty_chunks,
+#         meta_array=meta_array,
+#     )
+
+#     return z
 
 
 def _kwargs_compat(compressor, fill_value, kwargs):
