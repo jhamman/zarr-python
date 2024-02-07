@@ -12,7 +12,7 @@ from zarr.v3.attributes import Attributes
 from zarr.v3.common import ZARR_JSON, ZARRAY_JSON, ZATTRS_JSON, ZGROUP_JSON, make_cattr
 from zarr.v3.config import RuntimeConfiguration, SyncConfiguration
 from zarr.v3.store import StoreLike, StorePath, make_store_path
-from zarr.v3.sync import SyncMixin
+from zarr.v3.sync import SyncMixin, sync
 
 logger = logging.getLogger("zarr.group")
 
@@ -21,7 +21,7 @@ logger = logging.getLogger("zarr.group")
 class GroupMetadata:
     attributes: Dict[str, Any] = field(factory=dict)
     zarr_format: Literal[2, 3] = 3  # field(default=3, validator=validators.in_([2, 3]))
-    node_type: Literal["group"] = field(default="group", init=False)
+    node_type: Literal["group"] = field(default="group", init=True)
 
     def to_bytes(self) -> Dict[str, bytes]:
         if self.zarr_format == 3:
@@ -305,13 +305,14 @@ class Group(SyncMixin):
         exists_ok: bool = False,
         runtime_configuration: RuntimeConfiguration = RuntimeConfiguration(),
     ) -> Group:
-        obj = cls._sync(
+        obj = sync(
             AsyncGroup.create(
                 store,
                 attributes=attributes,
                 exists_ok=exists_ok,
                 runtime_configuration=runtime_configuration,
-            )
+            ),
+            loop=runtime_configuration.asyncio_loop,
         )
 
         return cls(obj)
@@ -322,7 +323,9 @@ class Group(SyncMixin):
         store: StoreLike,
         runtime_configuration: RuntimeConfiguration = RuntimeConfiguration(),
     ) -> Group:
-        obj = cls._sync(AsyncGroup.open(store, runtime_configuration))
+        obj = sync(
+            AsyncGroup.open(store, runtime_configuration), loop=runtime_configuration.asyncio_loop
+        )
         return cls(obj)
 
     def __getitem__(self, path: str) -> Union[Array, Group]:
