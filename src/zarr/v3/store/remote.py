@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, List
 
 from zarr.v3.abc.store import Store
 from zarr.v3.store.core import _dereference_path
@@ -10,6 +10,10 @@ from zarr.v3.common import BytesLike
 if TYPE_CHECKING:
     from upath import UPath
     from fsspec.asyn import AsyncFileSystem
+
+
+# TODOs:
+# * cache fsspec objects after instantiation
 
 
 class RemoteStore(Store):
@@ -93,3 +97,32 @@ class RemoteStore(Store):
         fs, root = self._make_fs()
         path = _dereference_path(root, key)
         return await fs._exists(path)
+
+    async def list(self) -> List[str]:
+        fs, root = self._make_fs()
+        keys = await fs._glob(root + "/*")
+        print(keys)
+        return [k.replace(root + "/", "") for k in keys]
+
+    async def list_prefix(self, prefix: str) -> List[str]:
+        return [key for key in self._store_dict if key.startswith(prefix)]
+
+    async def list_dir(self, prefix: str) -> List[str]:
+        if prefix == "":
+            return list({key.split("/", maxsplit=1)[0] for key in self._store_dict})
+        else:
+            return list(
+                {
+                    key.strip(prefix + "/").split("/")[0]
+                    for key in self._store_dict
+                    if (key.startswith(prefix + "/") and key != prefix)
+                }
+            )
+
+    async def set_partial_values(self, key_start_values: List[Tuple[str, int, bytes]]) -> None:
+        raise NotImplementedError
+
+    async def get_partial_values(
+        self, key_ranges: List[Tuple[str, Tuple[int, int]]]
+    ) -> List[bytes]:
+        return [await self.get(key, byte_range=byte_range) for key, byte_range in key_ranges]

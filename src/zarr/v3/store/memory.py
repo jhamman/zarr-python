@@ -39,7 +39,7 @@ class MemoryStore(Store):
     async def get_partial_values(
         self, key_ranges: List[Tuple[str, Tuple[int, int]]]
     ) -> List[bytes]:
-        raise NotImplementedError
+        return [self.get(key, byte_range=byte_range) for key, byte_range in key_ranges]
 
     async def exists(self, key: str) -> bool:
         return key in self._store_dict
@@ -62,7 +62,7 @@ class MemoryStore(Store):
         try:
             del self._store_dict[key]
         except KeyError:
-            pass  # Q(JH): why not raise?
+            return None
 
     async def set_partial_values(self, key_start_values: List[Tuple[str, int, bytes]]) -> None:
         raise NotImplementedError
