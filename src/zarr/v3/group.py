@@ -161,7 +161,6 @@ class AsyncGroup:
     ) -> AsyncArray | AsyncGroup:
 
         store_path = self.store_path / key
-        logger.warning("key=%s, store_path=%s", key, store_path)
 
         # Note:
         # in zarr-python v2, we first check if `key` references an Array, else if `key` references
@@ -305,20 +304,22 @@ class AsyncGroup:
 
             raise ValueError(msg)
 
-        async for key in self.store_path.store.list_dir(self.store_path.path):
-            # these keys are not valid child names so we make sure to skip them
-            # TODO: it would be nice to make these special keys accessible programmatically,
-            # and scoped to specific zarr versions
-            if key not in ("zarr.json", ".zgroup", ".zattrs"):
-                try:
-                    # TODO: performance optimization -- batch   
-                    print(key)
-                    child = await self.getitem(key)
-                    # keyerror is raised when `subkey``names an object in the store
-                    # in which case `subkey` cannot be the name of a sub-array or sub-group.
-                    yield child
-                except KeyError:
-                    pass
+        # leaving these imports here for demo purposes
+        from aiostream import stream, async_, pipe
+        from aiostream.aiter_utils import aitercontext
+
+        children = (
+            stream.iterate(self.store_path.store.list_dir(self.store_path.path))
+            | pipe.filter(lambda x: x not in ("zarr.json", ".zgroup", ".zattrs"))
+            |
+            # TODO: need to handle directories without a metadata doc
+            # previously, we gracefully ignored them by catching the KeyError here.
+            pipe.map(async_(self.getitem))
+        )
+
+        async with aitercontext(children) as safe_children:
+            async for child in safe_children:
+                yield child
 
     async def contains(self, child: str) -> bool:
         raise NotImplementedError

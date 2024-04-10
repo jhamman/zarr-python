@@ -56,7 +56,7 @@ def test_group_children(store: MemoryStore | LocalStore):
     # if group.children guarantees a particular order for the children.
     # If order is not guaranteed, then the better version of this test is
     # to compare two sets, but presently neither the group nor array classes are hashable.
-    print('getting children')
+    print("getting children")
     observed = group.children
     print(observed)
     print(list([subgroup, subarray, implicit_subgroup]))
@@ -64,8 +64,6 @@ def test_group_children(store: MemoryStore | LocalStore):
     assert subarray in observed
     assert implicit_subgroup in observed
     assert subgroup in observed
-
-
 
 
 @pytest.mark.parametrize("store", (("local", "memory")), indirect=["store"])
