@@ -80,4 +80,4 @@ class MemoryStore(Store):
     async def list_dir(self, prefix: str) -> AsyncGenerator[str, None]:
         for key in self._store_dict:
             if key.startswith(prefix + "/") and key != prefix:
-                yield key.strip(prefix + "/").rsplit("/", maxsplit=1)[0]
+                yield key.removeprefix(prefix + "/").rsplit("/", maxsplit=1)[0]

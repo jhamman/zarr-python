@@ -312,13 +312,11 @@ class AsyncGroup:
                 try:
                     # TODO: performance optimization -- load children concurrently   
                     child = await self.getitem(key)
-                    # keyerror is raised when `key``names an object in the store
-                    # in which case `subkey` cannot be the name of a sub-array or sub-group.
                     yield key, child
                 except KeyError:
-                    # keyerror is raised when `subkey` names an object (in the object storage sense),
-                    # as opposed to a prefix, in the store under the prefix associated with this group
-                    # in which case `subkey` cannot be the name of a sub-array or sub-group.
+                    # keyerror is raised when `key` names an object (in the object storage sense),
+                    # as opposed to a prefix, in the store under the prefix associated with this group.
+                    # In this case, `key` cannot be the name of a sub-array or sub-group.
                     logger.warning(
                         "Object at %s is not recognized as a component of a Zarr hierarchy.", key
                     )
