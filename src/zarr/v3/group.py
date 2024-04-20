@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 from dataclasses import asdict, dataclass, field, replace
 
 import asyncio
-import json
 import logging
 
 if TYPE_CHECKING:
@@ -48,15 +47,16 @@ class GroupMetadata(Metadata):
     zarr_format: Literal[2, 3] = 3
     node_type: Literal["group"] = field(default="group", init=False)
 
-    # todo: rename this, since it doesn't return bytes
-    def to_bytes(self) -> dict[str, bytes]:
+    def to_meta_dicts(self) -> dict[str, dict[str, Any]]:
+        """
+        Return a dictionary containing the group metadata as a dictionary of dictionaries
+        """
         if self.zarr_format == 3:
-            return {ZARR_JSON: json.dumps(self.to_dict()).encode()}
+            return {ZARR_JSON: self.to_dict()}
         else:
             return {
-                ZGROUP_JSON: json.dumps({"zarr_format": self.zarr_format}).encode(),
-                ZGROUP_JSON: json.dumps({"zarr_format": self.zarr_format}).encode(),
-                ZATTRS_JSON: json.dumps(self.attributes).encode(),
+                ZGROUP_JSON: {"zarr_format": self.zarr_format},
+                ZATTRS_JSON: self.attributes,
             }
 
     def __init__(self, attributes: dict[str, Any] | None = None, zarr_format: Literal[2, 3] = 3):
@@ -114,25 +114,25 @@ class AsyncGroup:
     ) -> AsyncGroup:
         store_path = make_store_path(store)
 
-        zarr_json_bytes: bytes | None
+        zarr_json: dict | None
 
         # TODO: consider trying to autodiscover the zarr-format here
         if zarr_format == 3:
             # V3 groups are comprised of a zarr.json object
             # (it is optional in the case of implicit groups)
-            zarr_json_bytes = await (store_path / ZARR_JSON).get()
-            zarr_json = (
-                json.loads(zarr_json_bytes) if zarr_json_bytes is not None else {"zarr_format": 3}
-            )
+            zarr_json = await (store_path / ZARR_JSON).get_metadata()
+            if zarr_json is None:
+                zarr_json = {"zarr_format": 3}
+
         elif zarr_format == 2:
             # V2 groups are comprised of a .zgroup and .zattrs objects
-            zgroup_bytes, zattrs_bytes = await asyncio.gather(
-                (store_path / ZGROUP_JSON).get(), (store_path / ZATTRS_JSON).get()
+            zgroup, zattrs = await asyncio.gather(
+                (store_path / ZGROUP_JSON).get_metadata(), (store_path / ZATTRS_JSON).get_metadata()
             )
-            if zgroup_bytes is None:
+            if zgroup is None:
                 raise FileNotFoundError(f"No Zarr v2 group metadata found at {store_path}")
-            zgroup = json.loads(zgroup_bytes)
-            zattrs = json.loads(zattrs_bytes) if zattrs_bytes is not None else {}
+            if zattrs is None:
+                zattrs = {}
             zarr_json = {**zgroup, "attributes": zattrs}
         else:
             raise ValueError(f"unexpected zarr_format: {zarr_format}")
@@ -170,8 +170,8 @@ class AsyncGroup:
             raise KeyError(key)
 
         if self.metadata.zarr_format == 3:
-            zarr_json_bytes = await (store_path / ZARR_JSON).get()
-            if zarr_json_bytes is None:
+            zarr_json = await (store_path / ZARR_JSON).get_metadata()
+            if zarr_json is None:
                 # implicit group?
                 logger.warning("group at %s is an implicit group", store_path)
                 zarr_json = {
@@ -179,8 +179,7 @@ class AsyncGroup:
                     "node_type": "group",
                     "attributes": {},
                 }
-            else:
-                zarr_json = json.loads(zarr_json_bytes)
+
             if zarr_json["node_type"] == "group":
                 return type(self).from_dict(store_path, zarr_json, self.runtime_configuration)
             elif zarr_json["node_type"] == "array":
@@ -192,16 +191,13 @@ class AsyncGroup:
         elif self.metadata.zarr_format == 2:
             # Q: how do we like optimistically fetching .zgroup, .zarray, and .zattrs?
             # This guarantees that we will always make at least one extra request to the store
-            zgroup_bytes, zarray_bytes, zattrs_bytes = await asyncio.gather(
-                (store_path / ZGROUP_JSON).get(),
-                (store_path / ZARRAY_JSON).get(),
-                (store_path / ZATTRS_JSON).get(),
+            zgroup, zarray, zattrs = await asyncio.gather(
+                (store_path / ZGROUP_JSON).get_metadata(),
+                (store_path / ZARRAY_JSON).get_metadata(),
+                (store_path / ZATTRS_JSON).get_metadata(),
             )
-
-            # unpack the zarray, if this is None then we must be opening a group
-            zarray = json.loads(zarray_bytes) if zarray_bytes else None
-            # unpack the zattrs, this can be None if no attrs were written
-            zattrs = json.loads(zattrs_bytes) if zattrs_bytes is not None else {}
+            if zattrs is None:
+                zattrs = {}
 
             if zarray is not None:
                 # TODO: update this once the V2 array support is part of the primary array class
@@ -210,11 +206,8 @@ class AsyncGroup:
                     store_path, zarray, runtime_configuration=self.runtime_configuration
                 )
             else:
-                zgroup = (
-                    json.loads(zgroup_bytes)
-                    if zgroup_bytes is not None
-                    else {"zarr_format": self.metadata.zarr_format}
-                )
+                if zgroup is None:
+                    zgroup = {"zarr_format": self.metadata.zarr_format}
                 zarr_json = {**zgroup, "attributes": zattrs}
                 return type(self).from_dict(store_path, zarr_json, self.runtime_configuration)
         else:
@@ -233,8 +226,8 @@ class AsyncGroup:
             raise ValueError(f"unexpected zarr_format: {self.metadata.zarr_format}")
 
     async def _save_metadata(self) -> None:
-        to_save = self.metadata.to_bytes()
-        awaitables = [(self.store_path / key).set(value) for key, value in to_save.items()]
+        to_save = self.metadata.to_meta_dicts()
+        awaitables = [(self.store_path / key).set_metadata(value) for key, value in to_save.items()]
         await asyncio.gather(*awaitables)
 
     @property
@@ -269,12 +262,12 @@ class AsyncGroup:
         self.metadata.attributes.update(new_attributes)
 
         # Write new metadata
-        to_save = self.metadata.to_bytes()
+        to_save = self.metadata.to_meta_dicts()
         if self.metadata.zarr_format == 2:
             # only save the .zattrs object
-            await (self.store_path / ZATTRS_JSON).set(to_save[ZATTRS_JSON])
+            await (self.store_path / ZATTRS_JSON).set_metadata(to_save[ZATTRS_JSON])
         else:
-            await (self.store_path / ZARR_JSON).set(to_save[ZARR_JSON])
+            await (self.store_path / ZARR_JSON).set_metadata(to_save[ZARR_JSON])
 
         self.metadata.attributes.clear()
         self.metadata.attributes.update(new_attributes)
@@ -310,7 +303,7 @@ class AsyncGroup:
             # and scoped to specific zarr versions
             if key not in ("zarr.json", ".zgroup", ".zattrs"):
                 try:
-                    # TODO: performance optimization -- load children concurrently   
+                    # TODO: performance optimization -- load children concurrently
                     child = await self.getitem(key)
                     yield key, child
                 except KeyError:
@@ -429,7 +422,7 @@ class Group(SyncMixin):
         new_metadata = replace(self.metadata, attributes=new_attributes)
 
         # Write new metadata
-        to_save = new_metadata.to_bytes()
+        to_save = new_metadata.to_meta_dicts()
         awaitables = [(self.store_path / key).set(value) for key, value in to_save.items()]
         await asyncio.gather(*awaitables)
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
-import json
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import numcodecs
@@ -145,15 +144,15 @@ class ArrayV2:
         runtime_configuration: RuntimeConfiguration = RuntimeConfiguration(),
     ) -> ArrayV2:
         store_path = make_store_path(store)
-        zarray_bytes, zattrs_bytes = await asyncio.gather(
-            (store_path / ZARRAY_JSON).get(),
-            (store_path / ZATTRS_JSON).get(),
+        zarray, zattrs = await asyncio.gather(
+            (store_path / ZARRAY_JSON).get_metadata(),
+            (store_path / ZATTRS_JSON).get_metadata(),
         )
-        assert zarray_bytes is not None
+        assert zarray is not None
         return cls.from_dict(
             store_path,
-            zarray_json=json.loads(zarray_bytes),
-            zattrs_json=json.loads(zattrs_bytes) if zattrs_bytes is not None else None,
+            zarray_json=zarray,
+            zattrs_json=zattrs,
             runtime_configuration=runtime_configuration,
         )
 
@@ -189,11 +188,9 @@ class ArrayV2:
     async def _save_metadata(self) -> None:
         self._validate_metadata()
 
-        await (self.store_path / ZARRAY_JSON).set(self.metadata.to_bytes())
+        await (self.store_path / ZARRAY_JSON).set_metadata(self.metadata.to_dict())
         if self.attributes is not None and len(self.attributes) > 0:
-            await (self.store_path / ZATTRS_JSON).set(
-                json.dumps(self.attributes).encode(),
-            )
+            await (self.store_path / ZATTRS_JSON).set_metadata(self.attributes)
         else:
             await (self.store_path / ZATTRS_JSON).delete()
 
@@ -432,7 +429,7 @@ class ArrayV2:
         )
 
         # Write new metadata
-        await (self.store_path / ZARRAY_JSON).set(new_metadata.to_bytes())
+        await (self.store_path / ZARRAY_JSON).set_metadata(new_metadata.to_dict())
         return replace(self, metadata=new_metadata)
 
     def resize(self, new_shape: ChunkCoords) -> ArrayV2:
@@ -505,17 +502,17 @@ class ArrayV2:
             dimension_names=None,
         )
 
-        new_metadata_bytes = new_metadata.to_bytes()
-        await (self.store_path / ZARR_JSON).set(new_metadata_bytes)
+        new_metadata = new_metadata.to_dict()
+        await (self.store_path / ZARR_JSON).set_metadata(new_metadata)
 
         return Array.from_dict(
             store_path=self.store_path,
-            data=json.loads(new_metadata_bytes),
+            data=new_metadata,
             runtime_configuration=self.runtime_configuration,
         )
 
     async def update_attributes_async(self, new_attributes: Dict[str, Any]) -> ArrayV2:
-        await (self.store_path / ZATTRS_JSON).set(json.dumps(new_attributes).encode())
+        await (self.store_path / ZATTRS_JSON).set_metadata(new_attributes)
         return replace(self, attributes=new_attributes)
 
     def update_attributes(self, new_attributes: Dict[str, Any]) -> ArrayV2:

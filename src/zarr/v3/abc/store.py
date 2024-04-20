@@ -1,7 +1,7 @@
 from abc import abstractmethod, ABC
 from collections.abc import AsyncGenerator
 
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
 
 
 class Store(ABC):
@@ -37,6 +37,20 @@ class Store(ABC):
         -------
         list[bytes]
             list of values, in the order of the key_ranges, may contain null/none for missing keys
+        """
+        ...
+
+    @abstractmethod
+    async def get_metadata(self, key: str) -> Optional[dict[str, Any]]:
+        """Retrieve the metadata associated with a given key.
+
+        Parameters
+        ----------
+        key : str
+
+        Returns
+        -------
+        bytes
         """
         ...
 
@@ -97,6 +111,17 @@ class Store(ABC):
             set of key, range_start, values triples, a key may occur multiple times with different
             range_starts, range_starts (considering the length of the respective values) must not
             specify overlapping ranges for the same key
+        """
+        ...
+
+    @abstractmethod
+    async def set_metadata(self, key: str, metadata: dict[str, Any]) -> None:
+        """Store metadata associated with a given key.
+
+        Parameters
+        ----------
+        key : str
+        metadata : dict
         """
         ...
 

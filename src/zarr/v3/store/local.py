@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Union, Optional, List, Tuple
 
 from zarr.v3.abc.store import Store
+from zarr.v3.store.mixins import JsonMetadataStoreMixin
 from zarr.v3.common import BytesLike, concurrent_map, to_thread
 
 
@@ -64,7 +65,7 @@ def _put(
         return path.write_bytes(value)
 
 
-class LocalStore(Store):
+class LocalStore(JsonMetadataStoreMixin, Store):
     supports_writes: bool = True
     supports_partial_writes: bool = True
     supports_listing: bool = True
@@ -157,7 +158,6 @@ class LocalStore(Store):
             if p.is_file():
                 yield str(p)
 
-
     async def list_prefix(self, prefix: str) -> AsyncGenerator[str, None]:
         """Retrieve all keys in the store with a given prefix.
 
@@ -172,7 +172,6 @@ class LocalStore(Store):
         for p in (self.root / prefix).rglob("*"):
             if p.is_file():
                 yield str(p)
-
 
     async def list_dir(self, prefix: str) -> AsyncGenerator[str, None]:
         """
@@ -189,7 +188,7 @@ class LocalStore(Store):
         """
         base = self.root / prefix
         to_strip = str(base) + "/"
-        
+
         try:
             key_iter = base.iterdir()
         except (FileNotFoundError, NotADirectoryError):
@@ -197,4 +196,3 @@ class LocalStore(Store):
 
         for key in key_iter:
             yield str(key).replace(to_strip, "")
-

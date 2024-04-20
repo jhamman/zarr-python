@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from typing import Optional, MutableMapping, List, Tuple
+from typing import Any, Optional, MutableMapping, List, Tuple
 
 from zarr.v3.common import BytesLike
 from zarr.v3.abc.store import Store
 
 
-# TODO: this store could easily be extended to wrap any MutuableMapping store from v2
-# When that is done, the `MemoryStore` will just be a store that wraps a dict.
 class MemoryStore(Store):
     supports_writes: bool = True
     supports_partial_writes: bool = True
@@ -37,6 +35,12 @@ class MemoryStore(Store):
         except KeyError:
             return None
 
+    async def get_metadata(self, key: str) -> Optional[dict[str, Any]]:
+        try:
+            return self._store_dict[key]
+        except KeyError:
+            return None
+
     async def get_partial_values(
         self, key_ranges: List[Tuple[str, Tuple[int, int]]]
     ) -> List[bytes]:
@@ -58,6 +62,9 @@ class MemoryStore(Store):
             self._store_dict[key] = buf
         else:
             self._store_dict[key] = value
+
+    async def set_metadata(self, key: str, metadata: dict[str, Any]) -> None:
+        self._store_dict[key] = metadata
 
     async def delete(self, key: str) -> None:
         try:
