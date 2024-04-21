@@ -40,7 +40,7 @@ class MemoryStore(Store):
     async def get_partial_values(
         self, key_ranges: List[Tuple[str, Tuple[int, int]]]
     ) -> List[bytes]:
-        raise NotImplementedError
+        return [await self.get(key, range) for key, range in key_ranges]
 
     async def exists(self, key: str) -> bool:
         return key in self._store_dict

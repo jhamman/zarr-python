@@ -7,9 +7,23 @@
 
 # import numpy as np
 from __future__ import annotations
+from zarr.v3.testing.store import StoreTests
 from zarr.v3.store.local import LocalStore
+from zarr.v3.store.memory import MemoryStore
 from pathlib import Path
 import pytest
+
+
+class TestLocalStore(StoreTests):
+    store_cls = LocalStore
+
+    @pytest.fixture(scope="function")
+    def store(self, tmpdir) -> LocalStore:
+        return self.store_cls(str(tmpdir))
+
+
+class TestMemoryStore(StoreTests):
+    store_cls = MemoryStore
 
 
 @pytest.mark.parametrize("auto_mkdir", (True, False))

@@ -310,7 +310,7 @@ class AsyncGroup:
             # and scoped to specific zarr versions
             if key not in ("zarr.json", ".zgroup", ".zattrs"):
                 try:
-                    # TODO: performance optimization -- load children concurrently   
+                    # TODO: performance optimization -- load children concurrently
                     child = await self.getitem(key)
                     yield key, child
                 except KeyError:
