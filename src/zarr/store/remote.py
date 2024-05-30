@@ -29,6 +29,7 @@ class RemoteStore(Store):
     def __init__(
         self,
         url: UPath | str,
+        *,
         mode: OpenMode = "r",
         allowed_exceptions: tuple[type[Exception], ...] = (
             FileNotFoundError,
@@ -81,10 +82,12 @@ class RemoteStore(Store):
         path = _dereference_path(self.path, key)
 
         try:
-            return await (
-                self._fs._cat_file(path, start=byte_range[0], end=byte_range[1])
-                if byte_range
-                else self._fs._cat_file(path)
+            return Buffer.from_bytes(
+                await (
+                    self._fs._cat_file(path, start=byte_range[0], end=byte_range[1])
+                    if byte_range
+                    else self._fs._cat_file(path)
+                )
             )
         # dear mypy: this is indeed defined as a tuple of exceptions
         except self.exceptions:  # type: ignore
@@ -100,7 +103,7 @@ class RemoteStore(Store):
         # write data
         if byte_range:
             raise NotImplementedError
-        await self._fs._pipe_file(path, value)
+        await self._fs._pipe_file(path, value.to_bytes())
 
     async def delete(self, key: str) -> None:
         path = _dereference_path(self.path, key)
