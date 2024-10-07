@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Self
 from zarr.abc.store import ByteRangeRequest, Store
 from zarr.core.buffer import Buffer, gpu
 from zarr.core.common import concurrent_map
-from zarr.store._utils import _normalize_interval_index
+from zarr.storage._utils import _normalize_interval_index
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterable, MutableMapping
@@ -14,9 +14,25 @@ if TYPE_CHECKING:
     from zarr.core.common import AccessModeLiteral
 
 
-# TODO: this store could easily be extended to wrap any MutableMapping store from v2
-# When that is done, the `MemoryStore` will just be a store that wraps a dict.
 class MemoryStore(Store):
+    """
+    In-memory store for testing purposes.
+
+    Parameters
+    ----------
+    store_dict : dict
+        Initial data
+    mode : str
+        Access mode
+
+    Attributes
+    ----------
+    supports_writes
+    supports_deletes
+    supports_partial_writes
+    supports_listing
+    """
+
     supports_writes: bool = True
     supports_deletes: bool = True
     supports_partial_writes: bool = True
@@ -101,10 +117,10 @@ class MemoryStore(Store):
         else:
             self._store_dict[key] = value
 
-    async def set_if_not_exists(self, key: str, default: Buffer) -> None:
+    async def set_if_not_exists(self, key: str, value: Buffer) -> None:
         self._check_writable()
         await self._ensure_open()
-        self._store_dict.setdefault(key, default)
+        self._store_dict.setdefault(key, value)
 
     async def delete(self, key: str) -> None:
         self._check_writable()
@@ -126,18 +142,6 @@ class MemoryStore(Store):
                 yield key.removeprefix(prefix)
 
     async def list_dir(self, prefix: str) -> AsyncGenerator[str, None]:
-        """
-        Retrieve all keys in the store that begin with a given prefix. Keys are returned with the
-        common leading prefix removed.
-
-        Parameters
-        ----------
-        prefix : str
-
-        Returns
-        -------
-        AsyncGenerator[str, None]
-        """
         if prefix.endswith("/"):
             prefix = prefix[:-1]
 
