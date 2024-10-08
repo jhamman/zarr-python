@@ -57,10 +57,10 @@ class LoggingStore(Store):
         return handler
 
     @contextmanager
-    def log(self) -> Generator[None, None, None]:
+    def log(self, *args) -> Generator[None, None, None]:
         method = inspect.stack()[2].function
         op = f"{type(self._store).__name__}.{method}"
-        self.logger.info(f"Calling {op}")
+        self.logger.info(f"Calling {op} {args}")
         start_time = time.time()
         try:
             self.counter[method] += 1
@@ -131,7 +131,7 @@ class LoggingStore(Store):
         prototype: BufferPrototype,
         byte_range: tuple[int | None, int | None] | None = None,
     ) -> Buffer | None:
-        with self.log():
+        with self.log(key):
             return await self._store.get(key=key, prototype=prototype, byte_range=byte_range)
 
     async def get_partial_values(
@@ -147,7 +147,7 @@ class LoggingStore(Store):
             return await self._store.exists(key)
 
     async def set(self, key: str, value: Buffer) -> None:
-        with self.log():
+        with self.log(key):
             return await self._store.set(key=key, value=value)
 
     async def set_if_not_exists(self, key: str, value: Buffer) -> None:

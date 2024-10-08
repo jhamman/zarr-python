@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from zarr.core.buffer import Buffer, cpu, gpu
-from zarr.storage.memory import GpuMemoryStore, MemoryStore
+from zarr.storage.memory import GpuMemoryStore, KVStore, MemoryStore
 from zarr.testing.store import StoreTests
 from zarr.testing.utils import gpu_test
 
@@ -99,3 +99,42 @@ class TestGpuMemoryStore(StoreTests[GpuMemoryStore, gpu.Buffer]):
         result = GpuMemoryStore.from_dict(d)
         for v in result._store_dict.values():
             assert type(v) is gpu.Buffer
+
+
+class TestKVStore(StoreTests[KVStore, cpu.Buffer]):
+    store_cls = KVStore
+    buffer_cls = cpu.Buffer
+
+    def set(self, store: KVStore, key: str, value: Buffer) -> None:
+        store._store_dict[key] = value.to_bytes()
+
+    def get(self, store: KVStore, key: str) -> Buffer:
+        return self.buffer_cls.from_bytes(store._store_dict[key])
+
+    @pytest.fixture(params=[None, True])
+    def store_kwargs(
+        self, request: pytest.FixtureRequest
+    ) -> dict[str, str | None | dict[str, bytes]]:
+        kwargs = {"store_dict": None, "mode": "r+"}
+        if request.param is True:
+            kwargs["store_dict"] = {}
+        return kwargs
+
+    @pytest.fixture
+    def store(self, store_kwargs: str | None | dict[str, bytes]) -> KVStore:
+        return self.store_cls(**store_kwargs)
+
+    def test_store_repr(self, store: KVStore) -> None:
+        assert str(store) == f"kvstore://{id(store._store_dict)}"
+
+    def test_store_supports_writes(self, store: KVStore) -> None:
+        assert store.supports_writes
+
+    def test_store_supports_listing(self, store: KVStore) -> None:
+        assert store.supports_listing
+
+    def test_store_supports_partial_writes(self, store: KVStore) -> None:
+        assert store.supports_partial_writes
+
+    def test_list_prefix(self, store: KVStore) -> None:
+        assert True

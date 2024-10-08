@@ -220,3 +220,62 @@ class GpuMemoryStore(MemoryStore):
         # Convert to gpu.Buffer
         gpu_value = value if isinstance(value, gpu.Buffer) else gpu.Buffer.from_buffer(value)
         await super().set(key, gpu_value, byte_range=byte_range)
+
+
+# this is a s
+class KVStore(MemoryStore):
+    _store_dict: MutableMapping[str, bytes]
+
+    def __init__(
+        self,
+        store_dict: MutableMapping[str, bytes] | None = None,
+        *,
+        mode: AccessModeLiteral = "r",
+    ) -> None:
+        super().__init__(mode=mode)
+        if store_dict is None:
+            store_dict: MutableMapping[str, bytes] = {}
+        self._store_dict = store_dict
+
+    def __str__(self) -> str:
+        return f"kvstore://{type(self._store_dict)}"
+
+    def __repr__(self) -> str:
+        return f"KVStore({str(self)!r})"
+
+    async def get(
+        self,
+        key: str,
+        prototype: BufferPrototype,
+        byte_range: tuple[int | None, int | None] | None = None,
+    ) -> Buffer | None:
+        if not self._is_open:
+            await self._open()
+        assert isinstance(key, str)
+        try:
+            value = self._store_dict[key]
+            start, length = _normalize_interval_index(value, byte_range)
+            return prototype.buffer.from_bytes(value[start : start + length])
+        except KeyError:
+            return None
+
+    async def set(self, key: str, value: Buffer, byte_range: tuple[int, int] | None = None) -> None:
+        self._check_writable()
+        await self._ensure_open()
+        assert isinstance(key, str)
+        if not isinstance(value, Buffer):
+            raise TypeError(f"Expected Buffer. Got {type(value)}.")
+
+        vb = value.to_bytes()
+
+        if byte_range is not None:
+            buf = self._store_dict[key]
+            buf[byte_range[0] : byte_range[1]] = vb
+            self._store_dict[key] = vb
+        else:
+            self._store_dict[key] = vb
+
+    async def set_if_not_exists(self, key: str, value: Buffer) -> None:
+        self._check_writable()
+        await self._ensure_open()
+        self._store_dict.setdefault(key, value.to_bytes())
