@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Self, TypeAlias
 
 from zarr.abc.store import ByteRequest, Store
 from zarr.core.buffer import Buffer, default_buffer_prototype
@@ -19,6 +19,7 @@ from zarr.errors import ContainsArrayAndGroupError, ContainsArrayError, Contains
 from zarr.storage._local import LocalStore
 from zarr.storage._memory import MemoryStore
 from zarr.storage._utils import normalize_path
+from zarr.storage._zep8 import URLParser, URLStoreResolver, is_zep8_url
 
 _has_fsspec = importlib.util.find_spec("fsspec")
 if _has_fsspec:
@@ -267,6 +268,124 @@ class StorePath:
 StoreLike: TypeAlias = Store | StorePath | FSMap | Path | str | dict[str, Buffer]
 
 
+class ZEP8ParseResult(NamedTuple):
+    """Result of parsing ZEP 8 URL components."""
+
+    store_like: str | StoreLike
+    zarr_format: ZarrFormat | None
+    path: str
+
+
+def parse_zep8_store_and_format(
+    store: StoreLike,
+    path: str | None = None,
+    zarr_format: ZarrFormat | None = None,
+) -> ZEP8ParseResult:
+    """
+    Parse ZEP 8 URL components and extract zarr format and path information.
+
+    This function extracts zarr format (zarr2:, zarr3:) and path information from
+    ZEP 8 URLs while leaving the store portion intact for processing by make_store_path.
+
+    Parameters
+    ----------
+    store : StoreLike
+        Store or URL string. If it's a ZEP 8 URL, the zarr format and path
+        will be extracted.
+    path : str, optional
+        Additional path to combine with any path from the URL.
+    zarr_format : int, optional
+        Explicit zarr format. If specified, takes precedence over URL-derived format.
+
+    Returns
+    -------
+    ZEP8ParseResult
+        Named tuple containing:
+        - store_like: The store portion with zarr format removed
+        - zarr_format: Extracted or provided zarr format (2, 3, or None)
+        - path: Combined path from URL and parameter
+
+    Examples
+    --------
+    >>> parse_zep8_store_and_format("file:data.zarr|zip:|zarr3:group", "subpath")
+    ZEP8ParseResult(store_like="file:data.zarr|zip:", zarr_format=3, path="group/subpath")
+
+    >>> parse_zep8_store_and_format("memory:", "array")
+    ZEP8ParseResult(store_like="memory:", zarr_format=None, path="array")
+    """
+    if not isinstance(store, str) or not is_zep8_url(store):
+        # Not a string or regular string path, return as-is
+        combined_path = path or ""
+        return ZEP8ParseResult(store_like=store, zarr_format=zarr_format, path=combined_path)
+
+    # Parse ZEP 8 URL
+    resolver = URLStoreResolver()
+
+    # Extract zarr format if not explicitly provided
+    extracted_format = zarr_format
+    if extracted_format is None:
+        url_format = resolver.extract_zarr_format(store)
+        if url_format == 2:
+            extracted_format = 2
+        elif url_format == 3:
+            extracted_format = 3
+
+    # Extract path from URL
+    url_path = resolver.extract_path(store)
+    combined_path = _combine_paths(url_path, path or "")
+
+    # Remove zarr format segments from store URL
+    store_without_format = _remove_zarr_format_from_url(store)
+
+    return ZEP8ParseResult(
+        store_like=store_without_format, zarr_format=extracted_format, path=combined_path
+    )
+
+
+def _remove_zarr_format_from_url(url: str) -> str:
+    """Remove zarr2: and zarr3: segments from a ZEP 8 URL."""
+    if not is_zep8_url(url):
+        return url
+
+    parser = URLParser()
+    try:
+        segments = parser.parse(url)
+    except Exception:
+        return url
+
+    # Filter out zarr format segments
+    filtered_segments = [
+        segment for segment in segments if segment.adapter not in ("zarr2", "zarr3")
+    ]
+
+    if not filtered_segments:
+        return url
+
+    # Reconstruct URL without zarr format segments
+    parts = []
+    for i, segment in enumerate(filtered_segments):
+        if i == 0:
+            # First segment
+            if segment.scheme:
+                # Handle scheme segments - need :// for most schemes
+                if segment.scheme in ("s3", "gcs", "gs", "http", "https", "ftp", "ftps"):
+                    parts.append(f"{segment.scheme}://{segment.path}")
+                else:
+                    parts.append(f"{segment.scheme}:{segment.path}")
+            elif segment.adapter:
+                parts.append(f"{segment.adapter}:{segment.path}")
+            else:
+                parts.append(segment.path)
+        else:
+            # Subsequent segments
+            if segment.path:
+                parts.append(f"{segment.adapter}:{segment.path}")
+            else:
+                parts.append(f"{segment.adapter}:")
+
+    return "|".join(parts)
+
+
 async def make_store_path(
     store_like: StoreLike | None,
     *,
@@ -297,10 +416,16 @@ async def make_store_path(
     If the `StoreLike` object is a str and starts with a protocol, the
     RemoteStore object is created with the given mode and storage options.
 
+    **ZEP 8 URL Support**: This function also supports ZEP 8 URL syntax for chained
+    store access. URLs containing pipe (|) characters are parsed as ZEP 8 URLs and
+    resolved to the appropriate store chains. All existing URL formats (s3://,
+    gs://, https://, local paths) continue to work unchanged.
+
     Parameters
     ----------
     store_like : StoreLike | None
-        The object to convert to a `StorePath` object.
+        The object to convert to a `StorePath` object. Can also include ZEP 8 URLs
+        like "s3://bucket/data.zip|zip:|zarr3:".
     path : str | None, optional
         The path to use when creating the `StorePath` object.  If None, the
         default path is the empty string.
@@ -320,10 +445,24 @@ async def make_store_path(
     ------
     TypeError
         If the StoreLike object is not one of the supported types.
+    ValueError
+        If a ZEP 8 URL is malformed or references unavailable store adapters.
     """
     from zarr.storage._fsspec import FsspecStore  # circular import
 
     path_normalized = normalize_path(path)
+
+    # Check if store_like is a ZEP 8 URL
+    if is_zep8_url(store_like):
+        resolver = URLStoreResolver()
+        store_kwargs = {}
+        if storage_options:
+            store_kwargs["storage_options"] = storage_options
+
+        store = await resolver.resolve_url(store_like, **store_kwargs)  # type: ignore[arg-type]
+        url_path = resolver.extract_path(store_like)  # type: ignore[arg-type]
+        combined_path = _combine_paths(url_path, path_normalized)
+        return await StorePath.open(store, path=combined_path, mode=mode)
 
     if (
         not (isinstance(store_like, str) and _is_fsspec_uri(store_like))
@@ -398,6 +537,32 @@ def _is_fsspec_uri(uri: str) -> bool:
     False
     """
     return "://" in uri or ("::" in uri and "local://" not in uri)
+
+
+def _combine_paths(url_path: str, additional_path: str) -> str:
+    """
+    Combine paths from URL resolution and additional path parameter.
+
+    Parameters
+    ----------
+    url_path : str
+        Path extracted from URL.
+    additional_path : str
+        Additional path to append.
+
+    Returns
+    -------
+    str
+        Combined path.
+    """
+    if not url_path and not additional_path:
+        return ""
+    elif not url_path:
+        return additional_path
+    elif not additional_path:
+        return url_path
+    else:
+        return f"{url_path.rstrip('/')}/{additional_path.lstrip('/')}"
 
 
 async def ensure_no_existing_node(store_path: StorePath, zarr_format: ZarrFormat) -> None:

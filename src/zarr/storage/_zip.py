@@ -15,10 +15,13 @@ from zarr.abc.store import (
     Store,
     SuffixByteRequest,
 )
+from zarr.abc.store_adapter import StoreAdapter
 from zarr.core.buffer import Buffer, BufferPrototype
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterable
+
+    from zarr.abc.store_adapter import URLSegment
 
 ZipStoreAccessModeLiteral = Literal["r", "w", "a"]
 
@@ -303,3 +306,97 @@ class ZipStore(Store):
         shutil.move(self.path, path)
         self.path = path
         await self._open()
+
+
+class ZipStoreAdapter(StoreAdapter):
+    """Store adapter for ZIP files in ZEP 8 URL chains."""
+
+    adapter_name = "zip"
+
+    @classmethod
+    async def from_url_segment(
+        cls,
+        segment: URLSegment,
+        preceding_url: str,
+        **kwargs: Any,
+    ) -> Store:
+        """
+        Create a ZipStore from a URL segment and preceding URL.
+
+        Parameters
+        ----------
+        segment : URLSegment
+            The URL segment with adapter='zip' and optional path.
+        preceding_url : str
+            The full URL before this adapter segment, pointing to the ZIP file.
+        **kwargs : Any
+            Additional arguments including storage_options.
+
+        Returns
+        -------
+        ZipStore
+            A configured ZipStore instance.
+
+        Raises
+        ------
+        ValueError
+            If the ZIP file cannot be accessed.
+        NotImplementedError
+            For unsupported URL schemes.
+
+        Examples
+        --------
+        For URL "s3://bucket/data.zip|zip:subdir/":
+        - segment.adapter = "zip"
+        - segment.path = "subdir/"
+        - preceding_url = "s3://bucket/data.zip"
+        - Uses fsspec to access remote ZIP file
+        """
+        # Determine read-only mode
+        read_only = kwargs.get("mode") == "r" or kwargs.get("storage_options", {}).get(
+            "read_only", False
+        )
+        mode: ZipStoreAccessModeLiteral = "r" if read_only else "a"
+
+        if preceding_url.startswith("file:"):
+            # Local file ZIP
+            zip_path = Path(preceding_url[5:])  # Remove 'file:' prefix
+
+            if not zip_path.exists():
+                raise FileNotFoundError(f"ZIP file not found at {zip_path}")
+
+            zip_store = ZipStore(
+                path=zip_path,
+                mode=mode,
+            )
+            await zip_store._open()
+            return zip_store
+
+        elif preceding_url.startswith(("s3://", "gs://", "gcs://", "https://", "http://")):
+            # Remote ZIP file - use fsspec
+            try:
+                # For now, create a simple ZipStore with the remote URL
+                # A full implementation would use fsspec to handle remote access
+                zip_store = ZipStore(
+                    path=preceding_url,  # Let ZipStore handle the URL
+                    mode=mode,
+                )
+                await zip_store._open()
+            except Exception as e:
+                raise NotImplementedError(
+                    f"Remote ZIP file access not fully implemented for {preceding_url}. "
+                    f"This requires fsspec integration for remote file handling: {e}"
+                ) from e
+            else:
+                return zip_store
+
+        else:
+            raise ValueError(f"Unsupported ZIP source URL: {preceding_url}")
+
+    @classmethod
+    def can_handle_scheme(cls, scheme: str) -> bool:
+        return scheme == "zip"
+
+    @classmethod
+    def get_supported_schemes(cls) -> list[str]:
+        return ["zip"]

@@ -11,9 +11,11 @@ import pytest
 
 import zarr
 from zarr import create_array
+from zarr.abc.store_adapter import URLSegment
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.group import Group
 from zarr.storage import ZipStore
+from zarr.storage._zip import ZipStoreAdapter
 from zarr.testing.store import StoreTests
 
 if TYPE_CHECKING:
@@ -155,3 +157,39 @@ class TestZipStore(StoreTests[ZipStore, cpu.Buffer]):
         assert destination.exists()
         assert not origin.exists()
         assert np.array_equal(array[...], np.arange(10))
+
+
+def test_zip_adapter_properties() -> None:
+    """Test ZipStoreAdapter creation."""
+    assert ZipStoreAdapter.can_handle_scheme("zip")
+    assert not ZipStoreAdapter.can_handle_scheme("foo")
+    assert ZipStoreAdapter.get_supported_schemes() == ["zip"]
+
+    adapter = ZipStoreAdapter()
+    assert adapter.adapter_name == "zip"
+
+
+async def test_zip_adapter_without_base_store() -> None:
+    """Test ZipStoreAdapter without base store should fail."""
+    adapter = ZipStoreAdapter()
+    segment = URLSegment(scheme=None, path="", adapter="zip")
+
+    with pytest.raises(ValueError, match="requires a base store"):
+        await adapter.from_url_segment(segment, "")
+
+
+async def test_zip_adapter_with_file_base(tmp_path: Path) -> None:
+    """Test ZipStoreAdapter with file base store."""
+    # Create a test ZIP file
+    zip_path = tmp_path / "test.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("data.txt", "test content")
+
+    # Create test zip file
+    zip_path.touch()  # Create empty file
+
+    adapter = ZipStoreAdapter()
+    segment = URLSegment(scheme=None, path="", adapter="zip")
+
+    store = await adapter.from_url_segment(segment, f"file:{tmp_path / 'test.zip'}")
+    assert isinstance(store, ZipStore)
