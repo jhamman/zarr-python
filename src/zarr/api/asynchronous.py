@@ -47,7 +47,7 @@ from zarr.errors import (
     ZarrUserWarning,
 )
 from zarr.storage import StorePath
-from zarr.storage._common import make_store_path
+from zarr.storage._common import make_store_path, parse_zep8_store_and_format
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -190,6 +190,8 @@ async def consolidate_metadata(
     ----------
     store : StoreLike
         The store-like object whose metadata you wish to consolidate.
+        Also supports ZEP 8 URL syntax for chained stores (e.g.,
+        "s3://bucket/data.zip|zip:|zarr3:").
     path : str, optional
         A path to a group in the store to consolidate at. Only children
         below that group will be consolidated.
@@ -208,7 +210,12 @@ async def consolidate_metadata(
         consolidated metadata, this function raises a `TypeError`.
         See ``Store.supports_consolidated_metadata``.
     """
-    store_path = await make_store_path(store, path=path)
+    # Parse ZEP 8 URL and extract zarr format and path
+    parsed = parse_zep8_store_and_format(store, path=path, zarr_format=zarr_format)
+    if parsed.zarr_format is not None:
+        zarr_format = parsed.zarr_format
+
+    store_path = await make_store_path(parsed.store_like, path=parsed.path)
 
     if not store_path.store.supports_consolidated_metadata:
         store_name = type(store_path.store).__name__
@@ -319,6 +326,8 @@ async def open(
     ----------
     store : Store or str, optional
         Store or path to directory in file system or name of zip file.
+        Also supports ZEP 8 URL syntax for chained stores (e.g.,
+        "s3://bucket/data.zip|zip:|zarr3:group").
     mode : {'r', 'r+', 'a', 'w', 'w-'}, optional
         Persistence mode: 'r' means read only (must exist); 'r+' means
         read/write (must exist); 'a' means read/write (create if doesn't
@@ -341,13 +350,20 @@ async def open(
     z : array or group
         Return type depends on what exists in the given store.
     """
+    # Parse ZEP 8 URL and extract zarr format and path
+    parsed = parse_zep8_store_and_format(store, path=path, zarr_format=zarr_format)
+    if parsed.zarr_format is not None:
+        zarr_format = parsed.zarr_format
+
     zarr_format = _handle_zarr_version_or_format(zarr_version=zarr_version, zarr_format=zarr_format)
     if mode is None:
-        if isinstance(store, (Store, StorePath)) and store.read_only:
+        if isinstance(parsed.store_like, (Store, StorePath)) and parsed.store_like.read_only:
             mode = "r"
         else:
             mode = "a"
-    store_path = await make_store_path(store, mode=mode, path=path, storage_options=storage_options)
+    store_path = await make_store_path(
+        parsed.store_like, mode=mode, path=parsed.path, storage_options=storage_options
+    )
 
     # TODO: the mode check below seems wrong!
     if "shape" not in kwargs and mode in {"a", "r", "r+", "w"}:
@@ -437,6 +453,8 @@ async def save_array(
     ----------
     store : Store or str
         Store or path to directory in file system or name of zip file.
+        Also supports ZEP 8 URL syntax for chained stores (e.g.,
+        "s3://bucket/data.zip|zip:|zarr3:array").
     arr : ndarray
         NumPy array with data to save.
     zarr_format : {2, 3, None}, optional
@@ -449,6 +467,11 @@ async def save_array(
     **kwargs
         Passed through to :func:`create`, e.g., compressor.
     """
+    # Parse ZEP 8 URL and extract zarr format and path
+    parsed = parse_zep8_store_and_format(store, path=path, zarr_format=zarr_format)
+    if parsed.zarr_format is not None:
+        zarr_format = parsed.zarr_format
+
     zarr_format = (
         _handle_zarr_version_or_format(zarr_version=zarr_version, zarr_format=zarr_format)
         or _default_zarr_format()
@@ -457,7 +480,9 @@ async def save_array(
         raise TypeError("arr argument must be numpy or other NDArrayLike array")
 
     mode = kwargs.pop("mode", "a")
-    store_path = await make_store_path(store, path=path, mode=mode, storage_options=storage_options)
+    store_path = await make_store_path(
+        parsed.store_like, path=parsed.path, mode=mode, storage_options=storage_options
+    )
     if np.isscalar(arr):
         arr = np.array(arr)
     shape = arr.shape
@@ -492,6 +517,8 @@ async def save_group(
     ----------
     store : Store or str
         Store or path to directory in file system or name of zip file.
+        Also supports ZEP 8 URL syntax for chained stores (e.g.,
+        "s3://bucket/data.zip|zip:|zarr3:group").
     *args : ndarray
         NumPy arrays with data to save.
     zarr_format : {2, 3, None}, optional
@@ -505,7 +532,14 @@ async def save_group(
         NumPy arrays with data to save.
     """
 
-    store_path = await make_store_path(store, path=path, mode="w", storage_options=storage_options)
+    # Parse ZEP 8 URL and extract zarr format and path
+    parsed = parse_zep8_store_and_format(store, path=path, zarr_format=zarr_format)
+    if parsed.zarr_format is not None:
+        zarr_format = parsed.zarr_format
+
+    store_path = await make_store_path(
+        parsed.store_like, path=parsed.path, mode="w", storage_options=storage_options
+    )
 
     zarr_format = (
         _handle_zarr_version_or_format(
@@ -641,6 +675,8 @@ async def group(
     ----------
     store : Store or str, optional
         Store or path to directory in file system.
+        Also supports ZEP 8 URL syntax for chained stores (e.g.,
+        "s3://bucket/data.zip|zip:|zarr3:group").
     overwrite : bool, optional
         If True, delete any pre-existing data in `store` at `path` before
         creating the group.
@@ -670,6 +706,11 @@ async def group(
         The new group.
     """
 
+    # Parse ZEP 8 URL and extract zarr format and path
+    parsed = parse_zep8_store_and_format(store, path=path, zarr_format=zarr_format)
+    if parsed.zarr_format is not None:
+        zarr_format = parsed.zarr_format
+
     zarr_format = _handle_zarr_version_or_format(zarr_version=zarr_version, zarr_format=zarr_format)
 
     mode: AccessModeLiteral
@@ -677,7 +718,9 @@ async def group(
         mode = "w"
     else:
         mode = "r+"
-    store_path = await make_store_path(store, path=path, mode=mode, storage_options=storage_options)
+    store_path = await make_store_path(
+        parsed.store_like, path=parsed.path, mode=mode, storage_options=storage_options
+    )
 
     if chunk_store is not None:
         warnings.warn("chunk_store is not yet implemented", ZarrRuntimeWarning, stacklevel=2)
@@ -718,6 +761,8 @@ async def create_group(
     ----------
     store : Store or str
         Store or path to directory in file system.
+        Also supports ZEP 8 URL syntax for chained stores (e.g.,
+        "s3://bucket/data.zip|zip:|zarr3:group").
     path : str, optional
         Group path within store.
     overwrite : bool, optional
@@ -738,12 +783,19 @@ async def create_group(
         The new group.
     """
 
+    # Parse ZEP 8 URL and extract zarr format and path
+    parsed = parse_zep8_store_and_format(store, path=path, zarr_format=zarr_format)
+    if parsed.zarr_format is not None:
+        zarr_format = parsed.zarr_format
+
     if zarr_format is None:
         zarr_format = _default_zarr_format()
 
     mode: Literal["a"] = "a"
 
-    store_path = await make_store_path(store, path=path, mode=mode, storage_options=storage_options)
+    store_path = await make_store_path(
+        parsed.store_like, path=parsed.path, mode=mode, storage_options=storage_options
+    )
 
     return await AsyncGroup.from_store(
         store=store_path,
@@ -774,6 +826,8 @@ async def open_group(
     ----------
     store : Store, str, or mapping, optional
         Store or path to directory in file system or name of zip file.
+        Also supports ZEP 8 URL syntax for chained stores (e.g.,
+        "s3://bucket/data.zip|zip:|zarr3:group").
 
         Strings are interpreted as paths on the local file system
         and used as the ``root`` argument to :class:`zarr.storage.LocalStore`.
@@ -830,6 +884,11 @@ async def open_group(
         The new group.
     """
 
+    # Parse ZEP 8 URL and extract zarr format and path
+    parsed = parse_zep8_store_and_format(store, path=path, zarr_format=zarr_format)
+    if parsed.zarr_format is not None:
+        zarr_format = parsed.zarr_format
+
     zarr_format = _handle_zarr_version_or_format(zarr_version=zarr_version, zarr_format=zarr_format)
 
     if cache_attrs is not None:
@@ -841,7 +900,9 @@ async def open_group(
     if chunk_store is not None:
         warnings.warn("chunk_store is not yet implemented", ZarrRuntimeWarning, stacklevel=2)
 
-    store_path = await make_store_path(store, mode=mode, storage_options=storage_options, path=path)
+    store_path = await make_store_path(
+        parsed.store_like, mode=mode, storage_options=storage_options, path=parsed.path
+    )
     if attributes is None:
         attributes = {}
 
@@ -954,6 +1015,8 @@ async def create(
         If not specified, the ``array.order`` parameter in the global config will be used.
     store : Store or str
         Store or path to directory in file system or name of zip file.
+        Also supports ZEP 8 URL syntax for chained stores (e.g.,
+        "s3://bucket/data.zip|zip:|zarr3:array").
     synchronizer : object, optional
         Array synchronizer.
     overwrite : bool, optional
@@ -1034,10 +1097,17 @@ async def create(
     if write_empty_chunks is not None:
         _warn_write_empty_chunks_kwarg()
 
+    # Parse ZEP 8 URL and extract zarr format and path
+    parsed = parse_zep8_store_and_format(store, path=path, zarr_format=zarr_format)
+    if parsed.zarr_format is not None:
+        zarr_format = parsed.zarr_format
+
     mode = kwargs.pop("mode", None)
     if mode is None:
         mode = "a"
-    store_path = await make_store_path(store, path=path, mode=mode, storage_options=storage_options)
+    store_path = await make_store_path(
+        parsed.store_like, path=parsed.path, mode=mode, storage_options=storage_options
+    )
 
     config_parsed = parse_array_config(config)
 
@@ -1229,6 +1299,8 @@ async def open_array(
     ----------
     store : Store or str
         Store or path to directory in file system or name of zip file.
+        Also supports ZEP 8 URL syntax for chained stores (e.g.,
+        "s3://bucket/data.zip|zip:|zarr3:array").
     zarr_version : {2, 3, None}, optional
         The zarr format to use when saving. Deprecated in favor of zarr_format.
     zarr_format : {2, 3, None}, optional
@@ -1247,8 +1319,15 @@ async def open_array(
         The opened array.
     """
 
+    # Parse ZEP 8 URL and extract zarr format and path
+    parsed = parse_zep8_store_and_format(store, path=path, zarr_format=zarr_format)
+    if parsed.zarr_format is not None:
+        zarr_format = parsed.zarr_format
+
     mode = kwargs.pop("mode", None)
-    store_path = await make_store_path(store, path=path, mode=mode, storage_options=storage_options)
+    store_path = await make_store_path(
+        parsed.store_like, path=parsed.path, mode=mode, storage_options=storage_options
+    )
 
     zarr_format = _handle_zarr_version_or_format(zarr_version=zarr_version, zarr_format=zarr_format)
 

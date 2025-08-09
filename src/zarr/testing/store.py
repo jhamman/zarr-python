@@ -176,7 +176,8 @@ class StoreTests(Generic[S, B]):
         assert not writer._is_open
         assert not writer.read_only
         await writer.set("foo", self.buffer_cls.from_bytes(b"bar"))
-        await writer.delete("foo")
+        if writer.supports_deletes:
+            await writer.delete("foo")
 
         # Test that you cannot write to the original store
         assert store.read_only
