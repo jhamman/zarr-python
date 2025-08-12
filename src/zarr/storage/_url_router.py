@@ -18,6 +18,12 @@ from zarr.storage._zep8 import URLStoreResolver, is_zep8_url
 if TYPE_CHECKING:
     from zarr.abc.store import Store
 
+__all__ = [
+    "URLRouter",
+    "get_url_router",
+    "register_custom_scheme_handler",
+]
+
 
 class URLRouter:
     """

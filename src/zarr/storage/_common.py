@@ -31,6 +31,13 @@ else:
 if TYPE_CHECKING:
     from zarr.core.buffer import BufferPrototype
 
+__all__ = [
+    "StoreLike",
+    "StorePath",
+    "is_zep8_url",
+    "make_store_path",
+]
+
 
 def _dereference_path(root: str, path: str) -> str:
     assert isinstance(root, str)
