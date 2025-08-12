@@ -13,6 +13,7 @@ from zarr.storage._local import LocalStore
 from zarr.storage._logging import LoggingStore
 from zarr.storage._memory import GpuMemoryStore, MemoryStore
 from zarr.storage._obstore import ObjectStore
+from zarr.storage._url_router import register_custom_scheme_handler
 from zarr.storage._wrapper import WrapperStore
 from zarr.storage._zip import ZipStore
 
@@ -27,6 +28,7 @@ __all__ = [
     "StorePath",
     "WrapperStore",
     "ZipStore",
+    "register_custom_scheme_handler",
 ]
 
 

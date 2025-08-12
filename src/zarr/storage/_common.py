@@ -18,8 +18,9 @@ from zarr.core.common import (
 from zarr.errors import ContainsArrayAndGroupError, ContainsArrayError, ContainsGroupError
 from zarr.storage._local import LocalStore
 from zarr.storage._memory import MemoryStore
+from zarr.storage._url_router import get_url_router
 from zarr.storage._utils import normalize_path
-from zarr.storage._zep8 import URLStoreResolver, is_zep8_url
+from zarr.storage._zep8 import is_zep8_url
 
 _has_fsspec = importlib.util.find_spec("fsspec")
 if _has_fsspec:
@@ -326,9 +327,9 @@ async def make_store_path(
 
     path_normalized = normalize_path(path)
 
-    # Check if store_like is a ZEP 8 URL
-    if isinstance(store_like, str) and is_zep8_url(store_like):
-        resolver = URLStoreResolver()
+    # Check if store_like is a URL that can be handled by the router
+    if isinstance(store_like, str) and ("://" in store_like or is_zep8_url(store_like)):
+        router = get_url_router()
         store_kwargs: dict[str, Any] = {}
         if mode:
             store_kwargs["mode"] = mode
@@ -336,11 +337,11 @@ async def make_store_path(
             store_kwargs["storage_options"] = storage_options
 
         # Extract path from URL and combine with provided path
-        url_path = resolver.extract_path(store_like)
+        url_path = router.extract_path(store_like)
         combined_path = _combine_paths(url_path, path_normalized)
 
-        # Resolve the ZEP 8 URL to a store
-        store = await resolver.resolve_url(store_like, **store_kwargs)
+        # Resolve the URL to a store using the router
+        store = await router.resolve(store_like, **store_kwargs)
         return await StorePath.open(store, path=combined_path, mode=mode)
 
     if (
