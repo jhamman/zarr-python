@@ -31,6 +31,7 @@ class URLRouter:
     def __init__(self) -> None:
         self.custom_schemes = CustomSchemeRegistry()
         self.zep8_resolver = URLStoreResolver()
+        self._load_custom_scheme_entry_points()
 
     async def resolve(self, url: str, **kwargs: Any) -> Store:
         """
@@ -268,6 +269,32 @@ class URLRouter:
 
         # For other custom schemes, return the path as-is
         return path
+
+    def _load_custom_scheme_entry_points(self) -> None:
+        """Load custom scheme handlers from entry points."""
+        try:
+            from importlib.metadata import entry_points
+
+            # Load from zarr.schemes group
+            for ep in entry_points(group="zarr.schemes"):
+                try:
+                    handler_cls = ep.load()
+                    self.custom_schemes.register_scheme(ep.name, handler_cls)
+                except Exception as e:
+                    # Log but don't fail - some optional handlers might not be available
+                    import warnings
+
+                    warnings.warn(
+                        f"Failed to load custom scheme handler '{ep.name}' from entry point: {e}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+        except ImportError:
+            # importlib.metadata not available in older Python versions
+            pass
+        except Exception:
+            # Don't fail if entry point loading fails
+            pass
 
 
 # Global router instance
