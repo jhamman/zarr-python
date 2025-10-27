@@ -6,6 +6,7 @@ from typing import Any
 from zarr.errors import ZarrDeprecationWarning
 from zarr.storage._common import StoreLike, StorePath
 from zarr.storage._fsspec import FsspecStore
+from zarr.storage._high_level import HighLevelStore, NodeInfo
 from zarr.storage._local import LocalStore
 from zarr.storage._logging import LoggingStore
 from zarr.storage._memory import GpuMemoryStore, MemoryStore
@@ -16,9 +17,11 @@ from zarr.storage._zip import ZipStore
 __all__ = [
     "FsspecStore",
     "GpuMemoryStore",
+    "HighLevelStore",
     "LocalStore",
     "LoggingStore",
     "MemoryStore",
+    "NodeInfo",
     "ObjectStore",
     "StoreLike",
     "StorePath",

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import warnings
-from asyncio import gather
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from itertools import starmap
@@ -39,7 +37,6 @@ from zarr.core.buffer import (
     NDBuffer,
     default_buffer_prototype,
 )
-from zarr.core.buffer.cpu import buffer_prototype as cpu_buffer_prototype
 from zarr.core.chunk_grids import RegularChunkGrid, _auto_partition, normalize_chunks
 from zarr.core.chunk_key_encodings import (
     ChunkKeyEncoding,
@@ -50,9 +47,6 @@ from zarr.core.chunk_key_encodings import (
 )
 from zarr.core.common import (
     JSON,
-    ZARR_JSON,
-    ZARRAY_JSON,
-    ZATTRS_JSON,
     DimensionNames,
     MemoryOrder,
     ShapeLike,
@@ -116,11 +110,9 @@ from zarr.core.metadata.v2 import (
     parse_compressor,
     parse_filters,
 )
-from zarr.core.metadata.v3 import parse_node_type_array
 from zarr.core.sync import sync
 from zarr.errors import (
     ArrayNotFoundError,
-    MetadataValidationError,
     ZarrDeprecationWarning,
     ZarrUserWarning,
 )
@@ -216,65 +208,51 @@ def create_codec_pipeline(metadata: ArrayMetadata, *, store: Store | None = None
 async def get_array_metadata(
     store_path: StorePath, zarr_format: ZarrFormat | None = 3
 ) -> dict[str, JSON]:
-    if zarr_format == 2:
-        zarray_bytes, zattrs_bytes = await gather(
-            (store_path / ZARRAY_JSON).get(prototype=cpu_buffer_prototype),
-            (store_path / ZATTRS_JSON).get(prototype=cpu_buffer_prototype),
-        )
-        if zarray_bytes is None:
+    """
+    Get array metadata using HighLevelStore.
+
+    This function uses HighLevelStore to handle all format-specific metadata
+    fetching and parsing, eliminating manual key access.
+
+    Note: If you need to specify zarr_format, it's better to pass it to make_store_path()
+    when creating the StorePath, rather than passing it here.
+    """
+    from zarr.storage._high_level import HighLevelStore
+
+    # Store is always a HighLevelStore (ensured by make_store_path)
+    hl_store = store_path.store
+    assert isinstance(hl_store, HighLevelStore)
+
+    # If format is specified and different from store's format, recreate HighLevelStore
+    # This is a legacy code path - prefer passing zarr_format to make_store_path()
+    if zarr_format is not None and (
+        not hl_store._format_detected or hl_store._zarr_format != zarr_format
+    ):
+        hl_store = HighLevelStore(hl_store.store, zarr_format=zarr_format)
+
+    try:
+        # Use HighLevelStore to fetch and parse array metadata
+        metadata_obj = await hl_store.get_array_metadata(store_path.path)
+        # Convert to dict for compatibility
+        return metadata_obj.to_dict()
+    except FileNotFoundError as e:
+        # Convert to ArrayNotFoundError for consistency with existing API
+        if zarr_format == 2:
             msg = (
                 "A Zarr V2 array metadata document was not found in store "
                 f"{store_path.store!r} at path {store_path.path!r}."
             )
-            raise ArrayNotFoundError(msg)
-    elif zarr_format == 3:
-        zarr_json_bytes = await (store_path / ZARR_JSON).get(prototype=cpu_buffer_prototype)
-        if zarr_json_bytes is None:
+        elif zarr_format == 3:
             msg = (
                 "A Zarr V3 array metadata document was not found in store "
                 f"{store_path.store!r} at path {store_path.path!r}."
             )
-            raise ArrayNotFoundError(msg)
-    elif zarr_format is None:
-        zarr_json_bytes, zarray_bytes, zattrs_bytes = await gather(
-            (store_path / ZARR_JSON).get(prototype=cpu_buffer_prototype),
-            (store_path / ZARRAY_JSON).get(prototype=cpu_buffer_prototype),
-            (store_path / ZATTRS_JSON).get(prototype=cpu_buffer_prototype),
-        )
-        if zarr_json_bytes is not None and zarray_bytes is not None:
-            # warn and favor v3
-            msg = f"Both zarr.json (Zarr format 3) and .zarray (Zarr format 2) metadata objects exist at {store_path}. Zarr v3 will be used."
-            warnings.warn(msg, category=ZarrUserWarning, stacklevel=1)
-        if zarr_json_bytes is None and zarray_bytes is None:
+        else:
             msg = (
                 f"Neither Zarr V3 nor Zarr V2 array metadata documents "
                 f"were found in store {store_path.store!r} at path {store_path.path!r}."
             )
-            raise ArrayNotFoundError(msg)
-        # set zarr_format based on which keys were found
-        if zarr_json_bytes is not None:
-            zarr_format = 3
-        else:
-            zarr_format = 2
-    else:
-        msg = f"Invalid value for 'zarr_format'. Expected 2, 3, or None. Got '{zarr_format}'."  # type: ignore[unreachable]
-        raise MetadataValidationError(msg)
-
-    metadata_dict: dict[str, JSON]
-    if zarr_format == 2:
-        # V2 arrays are comprised of a .zarray and .zattrs objects
-        assert zarray_bytes is not None
-        metadata_dict = json.loads(zarray_bytes.to_bytes())
-        zattrs_dict = json.loads(zattrs_bytes.to_bytes()) if zattrs_bytes is not None else {}
-        metadata_dict["attributes"] = zattrs_dict
-    else:
-        # V3 arrays are comprised of a zarr.json object
-        assert zarr_json_bytes is not None
-        metadata_dict = json.loads(zarr_json_bytes.to_bytes())
-
-        parse_node_type_array(metadata_dict.get("node_type"))
-
-    return metadata_dict
+        raise ArrayNotFoundError(msg) from e
 
 
 @dataclass(frozen=True)
@@ -1001,8 +979,34 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         # <AsyncArray memory://... shape=(100, 100) dtype=int32>
         ```
         """
-        store_path = await make_store_path(store)
-        metadata_dict = await get_array_metadata(store_path, zarr_format=zarr_format)
+        # make_store_path creates StorePath with HighLevelStore configured for zarr_format
+        store_path = await make_store_path(store, zarr_format=zarr_format)
+
+        # Store is always a HighLevelStore (ensured by make_store_path)
+        from zarr.storage import HighLevelStore
+
+        hl_store = store_path.store
+        assert isinstance(hl_store, HighLevelStore)
+
+        try:
+            # Get array metadata using HighLevelStore
+            metadata_obj = await hl_store.get_array_metadata(store_path.path)
+            # Convert to dict for compatibility
+            metadata_dict = metadata_obj.to_dict()
+        except FileNotFoundError as e:
+            # Convert to ArrayNotFoundError for consistency with existing API
+            if zarr_format == 2:
+                msg = (
+                    "A Zarr V2 array metadata document was not found in store "
+                    f"{store_path.store!r} at path {store_path.path!r}."
+                )
+            else:
+                msg = (
+                    "A Zarr V3 array metadata document was not found in store "
+                    f"{store_path.store!r} at path {store_path.path!r}."
+                )
+            raise ArrayNotFoundError(msg) from e
+
         # TODO: remove this cast when we have better type hints
         _metadata_dict = cast("ArrayV3MetadataDict", metadata_dict)
         return cls(store_path=store_path, metadata=_metadata_dict)
@@ -1844,15 +1848,21 @@ class AsyncArray(Generic[T_ArrayMetadata]):
             old_chunk_coords = set(self.metadata.chunk_grid.all_chunk_coords(self.metadata.shape))
             new_chunk_coords = set(self.metadata.chunk_grid.all_chunk_coords(new_shape))
 
-            async def _delete_key(key: str) -> None:
-                await (self.store_path / key).delete()
+            # Use HighLevelStore.delete_chunk for semantic chunk operations
+            from zarr.storage import HighLevelStore
+
+            # Store is always a HighLevelStore (ensured by make_store_path)
+            hl_store = self.store_path.store
+            assert isinstance(hl_store, HighLevelStore)
+
+            async def _delete_chunk(chunk_coords: tuple[int, ...]) -> None:
+                await hl_store.delete_chunk(
+                    self.store_path.path, chunk_coords, metadata=self.metadata
+                )
 
             await concurrent_map(
-                [
-                    (self.metadata.encode_chunk_key(chunk_coords),)
-                    for chunk_coords in old_chunk_coords.difference(new_chunk_coords)
-                ],
-                _delete_key,
+                [(chunk_coords,) for chunk_coords in old_chunk_coords.difference(new_chunk_coords)],
+                _delete_chunk,
                 zarr_config.get("async.concurrency"),
             )
 
@@ -2011,6 +2021,15 @@ class AsyncArray(Generic[T_ArrayMetadata]):
     def _info(
         self, count_chunks_initialized: int | None = None, count_bytes_stored: int | None = None
     ) -> Any:
+        # Get the store type - if it's a HighLevelStore, get the underlying store type
+        from zarr.storage import HighLevelStore
+
+        store = self.store_path.store
+        if isinstance(store, HighLevelStore):
+            store_type = type(store.store).__name__
+        else:
+            store_type = type(store).__name__
+
         return ArrayInfo(
             _zarr_format=self.metadata.zarr_format,
             _data_type=self._zdtype,
@@ -2023,7 +2042,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
             _compressors=self.compressors,
             _filters=self.filters,
             _serializer=self.serializer,
-            _store_type=type(self.store_path.store).__name__,
+            _store_type=store_type,
             _count_bytes=self.nbytes,
             _count_bytes_stored=count_bytes_stored,
             _count_chunks_initialized=count_chunks_initialized,

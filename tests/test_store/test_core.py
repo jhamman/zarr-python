@@ -91,8 +91,11 @@ async def test_make_store_path_none(path: str) -> None:
     """
     Test that creating a store_path with None creates a memorystore
     """
+    from zarr.storage._high_level import HighLevelStore
+
     store_path = await make_store_path(None, path=path)
-    assert isinstance(store_path.store, MemoryStore)
+    assert isinstance(store_path.store, HighLevelStore)
+    assert isinstance(store_path.store.store, MemoryStore)
     assert store_path.path == normalize_path(path)
 
 
@@ -108,10 +111,13 @@ async def test_make_store_path_local(
     """
     Test the various ways of invoking make_store_path that create a LocalStore
     """
+    from zarr.storage._high_level import HighLevelStore
+
     store_like = store_type(str(tmpdir))
     store_path = await make_store_path(store_like, path=path, mode=mode)
-    assert isinstance(store_path.store, LocalStore)
-    assert Path(store_path.store.root) == Path(tmpdir)
+    assert isinstance(store_path.store, HighLevelStore)
+    assert isinstance(store_path.store.store, LocalStore)
+    assert Path(store_path.store.store.root) == Path(tmpdir)
     assert store_path.path == normalize_path(path)
     assert store_path.read_only == (mode == "r")
 
@@ -125,13 +131,16 @@ async def test_make_store_path_store_path(
     Test invoking make_store_path when the input is another store_path. In particular we want to ensure
     that a new path is handled correctly.
     """
+    from zarr.storage._high_level import HighLevelStore
+
     ro = mode == "r"
     store_like = await StorePath.open(
         LocalStore(str(tmp_path), read_only=ro), path="root", mode=mode
     )
     store_path = await make_store_path(store_like, path=path, mode=mode)
-    assert isinstance(store_path.store, LocalStore)
-    assert Path(store_path.store.root) == tmp_path
+    assert isinstance(store_path.store, HighLevelStore)
+    assert isinstance(store_path.store.store, LocalStore)
+    assert Path(store_path.store.store.root) == tmp_path
     path_normalized = normalize_path(path)
     assert store_path.path == (store_like / path_normalized).path
     assert store_path.read_only == ro
@@ -161,11 +170,14 @@ async def test_make_store_path_invalid() -> None:
 
 
 async def test_make_store_path_fsspec() -> None:
+    from zarr.storage._high_level import HighLevelStore
+
     pytest.importorskip("fsspec")
     pytest.importorskip("requests")
     pytest.importorskip("aiohttp")
     store_path = await make_store_path("http://foo.com/bar")
-    assert isinstance(store_path.store, FsspecStore)
+    assert isinstance(store_path.store, HighLevelStore)
+    assert isinstance(store_path.store.store, FsspecStore)
 
 
 async def test_make_store_path_storage_options_raises(store_like: StoreLike) -> None:

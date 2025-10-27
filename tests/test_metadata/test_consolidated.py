@@ -531,16 +531,18 @@ class TestConsolidated:
     async def v2_consolidated_metadata_empty_dataset(
         self, memory_store: zarr.storage.MemoryStore
     ) -> AsyncGroup:
-        zgroup_bytes = cpu.Buffer.from_bytes(json.dumps({"zarr_format": 2}).encode())
-        zmetadata_bytes = cpu.Buffer.from_bytes(
-            b'{"metadata":{".zgroup":{"zarr_format":2}},"zarr_consolidated_format":1}'
+        # Write metadata files directly to the store
+        await memory_store.set(
+            ".zgroup", cpu.Buffer.from_bytes(json.dumps({"zarr_format": 2}).encode())
         )
-        return AsyncGroup._from_bytes_v2(
-            StorePath(memory_store, path=""),
-            zgroup_bytes,
-            zattrs_bytes=None,
-            consolidated_metadata_bytes=zmetadata_bytes,
+        await memory_store.set(
+            ".zmetadata",
+            cpu.Buffer.from_bytes(
+                b'{"metadata":{".zgroup":{"zarr_format":2}},"zarr_consolidated_format":1}'
+            ),
         )
+        # Open the group using the public API
+        return await zarr.api.asynchronous.open_group(store=memory_store, zarr_format=2)
 
     async def test_consolidated_metadata_backwards_compatibility(
         self, v2_consolidated_metadata_empty_dataset: AsyncGroup

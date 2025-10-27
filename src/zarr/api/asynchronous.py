@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import warnings
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -16,8 +16,7 @@ from zarr.core.array import (
     AsyncArray,
     CompressorLike,
     create_array,
-    from_array,
-    get_array_metadata,
+    from_array,  # TODO: deprecate?
 )
 from zarr.core.array_spec import ArrayConfigLike, parse_array_config
 from zarr.core.buffer import NDArrayLike
@@ -37,17 +36,17 @@ from zarr.core.group import (
     GroupMetadata,
     create_hierarchy,
 )
-from zarr.core.metadata import ArrayMetadataDict, ArrayV2Metadata, ArrayV3Metadata
+from zarr.core.metadata import ArrayV2Metadata, ArrayV3Metadata
 from zarr.errors import (
     ArrayNotFoundError,
     GroupNotFoundError,
-    NodeTypeValidationError,
     ZarrDeprecationWarning,
     ZarrRuntimeWarning,
     ZarrUserWarning,
 )
 from zarr.storage import StorePath
 from zarr.storage._common import make_store_path
+from zarr.storage._high_level import HighLevelStore
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -372,32 +371,56 @@ async def open(
             mode = "r"
         else:
             mode = "a"
-    store_path = await make_store_path(store, mode=mode, path=path, storage_options=storage_options)
+    store_path = await make_store_path(
+        store, mode=mode, path=path, storage_options=storage_options, zarr_format=zarr_format
+    )
+
+    hl_store = store_path.store
+    assert isinstance(hl_store, HighLevelStore)
+
+    # Import AsyncGroup for use in both code paths below
 
     # TODO: the mode check below seems wrong!
     if "shape" not in kwargs and mode in {"a", "r", "r+", "w"}:
+        # Use HighLevelStore to detect node type
+
         try:
-            metadata_dict = await get_array_metadata(store_path, zarr_format=zarr_format)
-            # TODO: remove this cast when we fix typing for array metadata dicts
-            _metadata_dict = cast("ArrayMetadataDict", metadata_dict)
-            # for v2, the above would already have raised an exception if not an array
-            zarr_format = _metadata_dict["zarr_format"]
-            is_v3_array = zarr_format == 3 and _metadata_dict.get("node_type") == "array"
-            if is_v3_array or zarr_format == 2:
+            # Get metadata and check node type
+            metadata_obj = await hl_store.get_metadata(store_path.path)
+
+            # Check if it's an array
+            if isinstance(metadata_obj, ArrayV2Metadata | ArrayV3Metadata):
                 return AsyncArray(
-                    store_path=store_path, metadata=_metadata_dict, config=kwargs.get("config")
+                    store_path=store_path,
+                    metadata=metadata_obj.to_dict(),
+                    config=kwargs.get("config"),
                 )
-        except (AssertionError, FileNotFoundError, NodeTypeValidationError):
+            else:
+                # It's a group - use open_group to properly handle consolidated metadata
+                return await open_group(
+                    store=store_path, zarr_format=zarr_format, mode=mode, **kwargs
+                )
+        except FileNotFoundError:
+            # Neither array nor group exists, fall through to create path
             pass
+
         return await open_group(store=store_path, zarr_format=zarr_format, mode=mode, **kwargs)
 
+    # User provided shape or other array-specific kwargs, try to create/open as array
+    # But first check if there's already a group at this location
     try:
-        return await open_array(store=store_path, zarr_format=zarr_format, mode=mode, **kwargs)
-    except (KeyError, NodeTypeValidationError):
-        # KeyError for a missing key
-        # NodeTypeValidationError for failing to parse node metadata as an array when it's
-        # actually a group
-        return await open_group(store=store_path, zarr_format=zarr_format, mode=mode, **kwargs)
+        # Check if something already exists at this path
+        metadata_obj = await hl_store.get_metadata(store_path.path)
+
+        # If it's a group, try to open as group (will fail with TypeError if kwargs invalid for group)
+        if not isinstance(metadata_obj, ArrayV2Metadata | ArrayV3Metadata):
+            return await open_group(store=store_path, zarr_format=zarr_format, mode=mode, **kwargs)
+        # If it's an array, fall through to open_array below
+    except FileNotFoundError:
+        # Nothing exists, fall through to create array
+        pass
+
+    return await open_array(store=store_path, zarr_format=zarr_format, mode=mode, **kwargs)
 
 
 async def open_consolidated(

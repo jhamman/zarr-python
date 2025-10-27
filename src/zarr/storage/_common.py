@@ -28,6 +28,7 @@ else:
 
 if TYPE_CHECKING:
     from zarr.core.buffer import BufferPrototype
+    from zarr.storage._high_level import HighLevelStore
 
 
 def _dereference_path(root: str, path: str) -> str:
@@ -54,11 +55,18 @@ class StorePath:
         The path within the store.
     """
 
-    store: Store
+    store: HighLevelStore
     path: str
 
-    def __init__(self, store: Store, path: str = "") -> None:
-        self.store = store
+    def __init__(self, store: Store | HighLevelStore, path: str = "") -> None:
+        from zarr.storage._high_level import HighLevelStore
+
+        if isinstance(store, HighLevelStore):
+            self.store = store
+        elif isinstance(store, Store):
+            self.store = HighLevelStore(store)
+        else:
+            raise TypeError(f"expected Store or HighLevelStore, got {type(store)}")
         self.path = normalize_path(path)
 
     @property
@@ -358,11 +366,12 @@ async def make_store(
 
 
 async def make_store_path(
-    store_like: StoreLike | None,
+    store_like: StoreLike | HighLevelStore | None,
     *,
     path: str | None = "",
     mode: AccessModeLiteral | None = None,
     storage_options: dict[str, Any] | None = None,
+    zarr_format: ZarrFormat | None = None,
 ) -> StorePath:
     """
     Convert a `StoreLike` object into a StorePath object.
@@ -385,11 +394,15 @@ async def make_store_path(
     storage_options : dict[str, Any] | None, optional
         The storage options to use when creating the `RemoteStore` object.  If
         None, the default storage options are used.
+    zarr_format : {2, 3, None}, optional
+        The zarr format to use when creating the HighLevelStore. If None (default),
+        the format will be auto-detected. If specified, the HighLevelStore will
+        validate that the store conforms to the specified format.
 
     Returns
     -------
     StorePath
-        The converted StorePath object.
+        The converted StorePath object with a HighLevelStore.
 
     Raises
     ------
@@ -403,6 +416,7 @@ async def make_store_path(
     make_store
     """
     path_normalized = normalize_path(path)
+    from zarr.storage._high_level import HighLevelStore
 
     if isinstance(store_like, StorePath):
         # Already a StorePath
@@ -411,16 +425,33 @@ async def make_store_path(
                 "'storage_options' was provided but unused. "
                 "'storage_options' is only used when the store is passed as a FSSpec URI string.",
             )
-        return store_like / path_normalized
+        store_path = store_like / path_normalized
+
+        # If zarr_format is specified, recreate HighLevelStore with that format
+        if zarr_format is not None:
+            hl_store = store_path.store
+            assert isinstance(hl_store, HighLevelStore)
+            new_hl_store = HighLevelStore(hl_store.store, zarr_format=zarr_format)
+            store_path = StorePath(new_hl_store, store_path.path)
+
+        return store_path
 
     elif _has_fsspec and isinstance(store_like, FSMap) and path:
         raise ValueError(
             "'path' was provided but is not used for FSMap store_like objects. Specify the path when creating the FSMap instance instead."
         )
-
     else:
-        store = await make_store(store_like, mode=mode, storage_options=storage_options)
-        return await StorePath.open(store, path=path_normalized, mode=mode)
+        if isinstance(store_like, HighLevelStore):
+            # If zarr_format is specified and different, recreate HighLevelStore
+            if zarr_format is not None:
+                high_level_store = HighLevelStore(store_like.store, zarr_format=zarr_format)
+            else:
+                high_level_store = store_like
+        else:
+            store = await make_store(store_like, mode=mode, storage_options=storage_options)
+            # Wrap store in HighLevelStore with specified format
+            high_level_store = HighLevelStore(store, zarr_format=zarr_format)
+        return await StorePath.open(high_level_store, path=path_normalized, mode=mode)
 
 
 def _is_fsspec_uri(uri: str) -> bool:

@@ -12,8 +12,10 @@ if TYPE_CHECKING:
     from typing import Any, Self, TypeAlias
 
     from zarr.core.buffer import Buffer, BufferPrototype
+    from zarr.core.common import JSON, ZarrFormat
+    from zarr.core.metadata import ArrayMetadata, GroupMetadata
 
-__all__ = ["ByteGetter", "ByteSetter", "Store", "set_or_delete"]
+__all__ = ["ByteGetter", "ByteSetter", "HighLevelStore", "Store", "set_or_delete"]
 
 
 @dataclass
@@ -470,6 +472,701 @@ class Store(ABC):
         limit = config.get("async.concurrency")
         sizes = await concurrent_map(keys, self.getsize, limit=limit)
         return sum(sizes)
+
+
+class HighLevelStore(ABC):
+    """
+    Abstract base class for high-level Zarr stores.
+
+    High-level stores provide a metadata-aware interface on top of the basic Store protocol,
+    offering semantic operations for arrays, groups, chunks, and metadata management.
+    """
+
+    # Core properties
+    @property
+    @abstractmethod
+    def store(self) -> Store:
+        """The underlying Store instance."""
+        ...
+
+    @property
+    @abstractmethod
+    def zarr_format(self) -> ZarrFormat:
+        """The Zarr format version (2 or 3), or None if not yet detected."""
+        ...
+
+    @property
+    @abstractmethod
+    def read_only(self) -> bool:
+        """Is the store read-only?"""
+        ...
+
+    # Store capability properties
+    @property
+    @abstractmethod
+    def supports_writes(self) -> bool:
+        """Does the store support writes?"""
+        ...
+
+    @property
+    @abstractmethod
+    def supports_deletes(self) -> bool:
+        """Does the store support deletes?"""
+        ...
+
+    @property
+    @abstractmethod
+    def supports_listing(self) -> bool:
+        """Does the store support listing?"""
+        ...
+
+    @property
+    @abstractmethod
+    def supports_partial_writes(self) -> bool:
+        """Does the store support partial writes?"""
+        ...
+
+    @property
+    def supports_consolidated_metadata(self) -> bool:
+        """
+        Does the store support consolidated metadata?
+
+        Returns
+        -------
+        bool
+            True if the store supports consolidated metadata operations.
+            Default is True. Override to return False in implementations
+            that don't support consolidated metadata (e.g., database-backed
+            stores with native fast metadata access).
+        """
+        return True
+
+    # Store protocol methods (delegated to underlying store)
+    @abstractmethod
+    async def get(
+        self,
+        key: str,
+        prototype: BufferPrototype,
+        byte_range: ByteRequest | None = None,
+    ) -> Buffer | None:
+        """Retrieve the value associated with a given key."""
+        ...
+
+    @abstractmethod
+    async def set(self, key: str, value: Buffer) -> None:
+        """Store a (key, value) pair."""
+        ...
+
+    @abstractmethod
+    async def set_if_not_exists(self, key: str, value: Buffer) -> None:
+        """Store a key to value if the key is not already present."""
+        ...
+
+    @abstractmethod
+    async def delete(self, key: str) -> None:
+        """Remove a key from the store."""
+        ...
+
+    @abstractmethod
+    async def exists(self, key: str) -> bool:
+        """Check if a key exists in the store."""
+        ...
+
+    @abstractmethod
+    def list(self) -> AsyncIterator[str]:
+        """Retrieve all keys in the store."""
+        ...
+
+    @abstractmethod
+    def list_prefix(self, prefix: str) -> AsyncIterator[str]:
+        """Retrieve all keys in the store that begin with a given prefix."""
+        ...
+
+    @abstractmethod
+    def list_dir(self, prefix: str) -> AsyncIterator[str]:
+        """Retrieve all keys and prefixes with a given prefix."""
+        ...
+
+    @abstractmethod
+    async def delete_dir(self, prefix: str) -> None:
+        """Remove all keys and prefixes that begin with a given prefix."""
+        ...
+
+    @abstractmethod
+    async def is_empty(self, prefix: str) -> bool:
+        """Check if the directory is empty."""
+        ...
+
+    @abstractmethod
+    async def get_partial_values(
+        self,
+        prototype: BufferPrototype,
+        key_ranges: Iterable[tuple[str, ByteRequest | None]],
+    ) -> list[Buffer | None]:
+        """Retrieve possibly partial values from given key_ranges."""
+        ...
+
+    @abstractmethod
+    async def getsize(self, key: str) -> int:
+        """Return the size, in bytes, of a value in the store."""
+        ...
+
+    @abstractmethod
+    async def getsize_prefix(self, prefix: str) -> int:
+        """Return the size, in bytes, of all values under a prefix."""
+        ...
+
+    @abstractmethod
+    def with_read_only(self, read_only: bool) -> HighLevelStore:
+        """Return a new store with a new read_only setting."""
+        ...
+
+    # High-level metadata operations
+    @abstractmethod
+    async def detect_format(self, path: str = "") -> ZarrFormat:
+        """
+        Auto-detect the Zarr format at a given path.
+
+        Parameters
+        ----------
+        path : str
+            Path to check
+
+        Returns
+        -------
+        ZarrFormat
+            The detected Zarr format (2 or 3)
+        """
+        ...
+
+    @abstractmethod
+    async def get_metadata(self, path: str) -> ArrayMetadata | GroupMetadata:
+        """
+        Get metadata (array or group) and return typed object.
+
+        Parameters
+        ----------
+        path : str
+            Path to the node
+
+        Returns
+        -------
+        ArrayMetadata | GroupMetadata
+            Parsed metadata object
+        """
+        ...
+
+    @abstractmethod
+    async def get_array_metadata(self, path: str) -> ArrayMetadata:
+        """
+        Fetch array metadata with type validation.
+
+        Parameters
+        ----------
+        path : str
+            Path to the array
+
+        Returns
+        -------
+        ArrayMetadata
+            Parsed array metadata
+        """
+        ...
+
+    @abstractmethod
+    async def get_group_metadata(self, path: str) -> GroupMetadata:
+        """
+        Fetch group metadata with type validation.
+
+        Parameters
+        ----------
+        path : str
+            Path to the group
+
+        Returns
+        -------
+        GroupMetadata
+            Parsed group metadata
+        """
+        ...
+
+    @abstractmethod
+    async def has_consolidated_metadata(
+        self, path: str, consolidated_key: str = ".zmetadata"
+    ) -> bool:
+        """
+        Check if consolidated metadata exists at the given path.
+
+        Parameters
+        ----------
+        path : str
+            Path to check for consolidated metadata
+        consolidated_key : str, default ".zmetadata"
+            Key for v2 consolidated metadata file (ignored for v3)
+
+        Returns
+        -------
+        bool
+            True if consolidated metadata exists, False otherwise
+        """
+        ...
+
+    @abstractmethod
+    async def get_group_metadata_bytes(
+        self, path: str, *, consolidated_key: str = ".zmetadata"
+    ) -> dict[str, Any]:
+        """
+        Get raw metadata bytes for opening a group with optional consolidated metadata.
+
+        This method reads all necessary metadata files from the store without parsing them,
+        allowing the caller to construct a group with consolidated metadata support.
+
+        Parameters
+        ----------
+        path : str
+            Path to the group
+        consolidated_key : str, default ".zmetadata"
+            Key for v2 consolidated metadata file
+
+        Returns
+        -------
+        dict
+            Dictionary containing:
+            - 'zarr_json_bytes': Buffer | None - v3 metadata
+            - 'zgroup_bytes': Buffer | None - v2 group metadata
+            - 'zattrs_bytes': Buffer | None - v2 attributes
+            - 'consolidated_bytes': Buffer | None - v2 consolidated metadata
+            - 'detected_format': Literal[2, 3] - detected zarr format
+        """
+        ...
+
+    @abstractmethod
+    async def open_group_metadata(
+        self,
+        path: str,
+        *,
+        use_consolidated: bool | None = None,
+        consolidated_key: str = ".zmetadata",
+    ) -> GroupMetadata:
+        """
+        Open and parse group metadata with optional consolidated metadata support.
+
+        This method handles all the complexity of reading, parsing, and constructing
+        GroupMetadata objects, including consolidated metadata if present.
+
+        Parameters
+        ----------
+        path : str
+            Path to the group
+        use_consolidated : bool | None, default None
+            Whether to use consolidated metadata:
+            - True: require consolidated metadata (raise if not found)
+            - False: ignore consolidated metadata even if present
+            - None: use consolidated metadata if available
+        consolidated_key : str, default ".zmetadata"
+            Key for v2 consolidated metadata file
+
+        Returns
+        -------
+        GroupMetadata
+            Parsed group metadata with consolidated metadata if applicable
+
+        Raises
+        ------
+        FileNotFoundError
+            If the group doesn't exist
+        ValueError
+            If use_consolidated=True but consolidated metadata not found
+        """
+        ...
+
+    @abstractmethod
+    async def set_metadata(
+        self,
+        path: str,
+        metadata: ArrayMetadata | GroupMetadata,
+        *,
+        ensure_parents: bool = False,
+    ) -> None:
+        """
+        Store metadata for an array or group.
+
+        Parameters
+        ----------
+        path : str
+            Path to store the metadata at
+        metadata : ArrayMetadata | GroupMetadata
+            Metadata object to store
+        ensure_parents : bool, default False
+            If True, create parent groups as needed
+        """
+        ...
+
+    # Node operations
+    @abstractmethod
+    async def get_node_type(self, path: str) -> Literal["array", "group", "nothing"]:
+        """
+        Determine the node type at a given path.
+
+        Parameters
+        ----------
+        path : str
+            Path to check
+
+        Returns
+        -------
+        Literal["array", "group", "nothing"]
+            The type of node at the path
+        """
+        ...
+
+    @abstractmethod
+    async def contains_array(self, path: str) -> bool:
+        """Check if an array exists at the given path."""
+        ...
+
+    @abstractmethod
+    async def contains_group(self, path: str) -> bool:
+        """Check if a group exists at the given path."""
+        ...
+
+    @abstractmethod
+    async def ensure_no_existing_node(
+        self,
+        path: str,
+        *,
+        zarr_format: ZarrFormat,
+    ) -> None:
+        """
+        Ensure no existing node (array or group) exists at the given path.
+
+        Parameters
+        ----------
+        path : str
+            Path to check
+        zarr_format : ZarrFormat
+            Zarr format version
+
+        Raises
+        ------
+        ContainsArrayError
+            If an array exists at the path
+        ContainsGroupError
+            If a group exists at the path
+        """
+        ...
+
+    @abstractmethod
+    async def delete_node(self, path: str) -> None:
+        """Delete a node (array or group) at the given path."""
+        ...
+
+    @abstractmethod
+    async def delete_array(
+        self,
+        path: str,
+        *,
+        metadata: ArrayMetadata | None = None,
+    ) -> None:
+        """
+        Delete an array and all its chunks.
+
+        Parameters
+        ----------
+        path : str
+            Path to the array
+        metadata : ArrayMetadata, optional
+            Array metadata (fetched if not provided)
+        """
+        ...
+
+    @abstractmethod
+    async def delete_group(
+        self,
+        path: str,
+        *,
+        metadata: GroupMetadata | None = None,
+    ) -> None:
+        """
+        Delete a group and all its contents recursively.
+
+        Parameters
+        ----------
+        path : str
+            Path to the group
+        metadata : GroupMetadata, optional
+            Group metadata (fetched if not provided)
+        """
+        ...
+
+    # Chunk operations
+    @abstractmethod
+    async def get_chunk(
+        self,
+        path: str,
+        chunk_coords: tuple[int, ...],
+        prototype: BufferPrototype,
+        *,
+        metadata: ArrayMetadata | None = None,
+    ) -> Buffer | None:
+        """
+        Retrieve a specific chunk by coordinates.
+
+        Parameters
+        ----------
+        path : str
+            Path to the array
+        chunk_coords : tuple[int, ...]
+            Chunk coordinates
+        prototype : BufferPrototype
+            Buffer prototype
+        metadata : ArrayMetadata, optional
+            Array metadata (fetched if not provided)
+
+        Returns
+        -------
+        Buffer | None
+            Chunk data or None if not found
+        """
+        ...
+
+    @abstractmethod
+    async def set_chunk(
+        self,
+        path: str,
+        chunk_coords: tuple[int, ...],
+        value: Buffer,
+        *,
+        metadata: ArrayMetadata | None = None,
+    ) -> None:
+        """
+        Store a specific chunk by coordinates.
+
+        Parameters
+        ----------
+        path : str
+            Path to the array
+        chunk_coords : tuple[int, ...]
+            Chunk coordinates
+        value : Buffer
+            Chunk data
+        metadata : ArrayMetadata, optional
+            Array metadata (fetched if not provided)
+        """
+        ...
+
+    @abstractmethod
+    async def delete_chunk(
+        self,
+        path: str,
+        chunk_coords: tuple[int, ...],
+        *,
+        metadata: ArrayMetadata | None = None,
+    ) -> None:
+        """
+        Delete a specific chunk by coordinates.
+
+        Parameters
+        ----------
+        path : str
+            Path to the array
+        chunk_coords : tuple[int, ...]
+            Chunk coordinates
+        metadata : ArrayMetadata, optional
+            Array metadata (fetched if not provided)
+        """
+        ...
+
+    @abstractmethod
+    async def exists_chunk(
+        self,
+        path: str,
+        chunk_coords: tuple[int, ...],
+        *,
+        metadata: ArrayMetadata | None = None,
+    ) -> bool:
+        """
+        Check if a specific chunk exists by coordinates.
+
+        Parameters
+        ----------
+        path : str
+            Path to the array
+        chunk_coords : tuple[int, ...]
+            Chunk coordinates
+        metadata : ArrayMetadata, optional
+            Array metadata (fetched if not provided)
+
+        Returns
+        -------
+        bool
+            True if chunk exists
+        """
+        ...
+
+    @abstractmethod
+    def list_chunks(
+        self,
+        path: str,
+        *,
+        metadata: ArrayMetadata | None = None,
+    ) -> AsyncIterator[tuple[int, ...]]:
+        """
+        List all chunk coordinates for an array.
+
+        Parameters
+        ----------
+        path : str
+            Path to the array
+        metadata : ArrayMetadata, optional
+            Array metadata (fetched if not provided)
+
+        Yields
+        ------
+        tuple[int, ...]
+            Chunk coordinates
+        """
+        ...
+
+    # Storage information
+    @abstractmethod
+    async def get_size(
+        self,
+        path: str,
+        *,
+        metadata: ArrayMetadata | GroupMetadata | None = None,
+    ) -> int:
+        """
+        Get total size in bytes of an array or group.
+
+        Parameters
+        ----------
+        path : str
+            Path to the node
+        metadata : ArrayMetadata | GroupMetadata, optional
+            Metadata (fetched if not provided)
+
+        Returns
+        -------
+        int
+            Total size in bytes
+        """
+        ...
+
+    @abstractmethod
+    async def get_array_storage_info(
+        self,
+        path: str,
+        *,
+        metadata: ArrayMetadata | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get detailed storage information for an array.
+
+        Parameters
+        ----------
+        path : str
+            Path to the array
+        metadata : ArrayMetadata, optional
+            Array metadata (fetched if not provided)
+
+        Returns
+        -------
+        dict[str, Any]
+            Storage information
+        """
+        ...
+
+    @abstractmethod
+    async def get_group_storage_info(
+        self,
+        path: str,
+        *,
+        metadata: GroupMetadata | None = None,
+    ) -> dict[str, Any]:
+        """
+        Get detailed storage information for a group.
+
+        Parameters
+        ----------
+        path : str
+            Path to the group
+        metadata : GroupMetadata, optional
+            Group metadata (fetched if not provided)
+
+        Returns
+        -------
+        dict[str, Any]
+            Storage information
+        """
+        ...
+
+    @abstractmethod
+    async def get_hierarchy_tree(
+        self,
+        path: str,
+    ) -> dict[str, JSON]:
+        """
+        Get the hierarchy tree starting from a path.
+
+        Parameters
+        ----------
+        path : str
+            Root path
+
+        Returns
+        -------
+        dict[str, JSON]
+            Hierarchy tree structure
+        """
+        ...
+
+    @abstractmethod
+    def list_children(self, path: str) -> AsyncIterator[str]:
+        """
+        List immediate children of a group.
+
+        Parameters
+        ----------
+        path : str
+            Path to the group
+
+        Yields
+        ------
+        str
+            Child names (relative to parent)
+        """
+        ...
+
+    @abstractmethod
+    def list_children_with_metadata(
+        self, path: str
+    ) -> AsyncIterator[tuple[str, ArrayMetadata | GroupMetadata]]:
+        """
+        List immediate children of a group with their metadata.
+
+        Parameters
+        ----------
+        path : str
+            Path to the group
+
+        Yields
+        ------
+        tuple[str, ArrayMetadata | GroupMetadata]
+            Child name and metadata
+        """
+        ...
+
+    # Magic methods
+    @abstractmethod
+    def __eq__(self, other: object) -> bool:
+        """Equality comparison."""
+        ...
+
+    @abstractmethod
+    def __hash__(self) -> int:
+        """Hash for use in sets and dicts."""
+        ...
 
 
 @runtime_checkable

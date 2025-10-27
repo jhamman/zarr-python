@@ -1470,14 +1470,22 @@ async def test_open_mutable_mapping():
     group = await zarr.api.asynchronous.open_group(
         store={},
     )
-    assert isinstance(group.store_path.store, MemoryStore)
+    # Store is wrapped in HighLevelStore, check underlying store
+    from zarr.storage import HighLevelStore
+
+    assert isinstance(group.store_path.store, HighLevelStore)
+    assert isinstance(group.store_path.store.store, MemoryStore)
 
 
 def test_open_mutable_mapping_sync():
     group = zarr.open_group(
         store={},
     )
-    assert isinstance(group.store_path.store, MemoryStore)
+    # Store is wrapped in HighLevelStore, check underlying store
+    from zarr.storage import HighLevelStore
+
+    assert isinstance(group.store_path.store, HighLevelStore)
+    assert isinstance(group.store_path.store.store, MemoryStore)
 
 
 async def test_open_ambiguous_node():

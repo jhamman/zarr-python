@@ -5,7 +5,6 @@ import itertools
 import json
 import logging
 import unicodedata
-import warnings
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field, fields, replace
 from itertools import accumulate
@@ -56,9 +55,8 @@ from zarr.errors import (
     GroupNotFoundError,
     MetadataValidationError,
     ZarrDeprecationWarning,
-    ZarrUserWarning,
 )
-from zarr.storage import StoreLike, StorePath
+from zarr.storage import HighLevelStore, StoreLike, StorePath
 from zarr.storage._common import ensure_no_existing_node, make_store_path
 from zarr.storage._utils import _join_paths, _normalize_path_keys, normalize_path
 
@@ -467,7 +465,7 @@ class AsyncGroup:
         overwrite: bool = False,
         zarr_format: ZarrFormat = 3,
     ) -> AsyncGroup:
-        store_path = await make_store_path(store)
+        store_path = await make_store_path(store, zarr_format=zarr_format)
 
         if overwrite:
             if store_path.store.supports_deletes:
@@ -515,7 +513,8 @@ class AsyncGroup:
             (``.zmetadata`` by default). Specify the custom key as ``use_consolidated``
             to load consolidated metadata from a non-default key.
         """
-        store_path = await make_store_path(store)
+        # make_store_path creates StorePath with HighLevelStore configured for zarr_format
+        store_path = await make_store_path(store, zarr_format=zarr_format)
         if not store_path.store.supports_consolidated_metadata:
             # Fail if consolidated metadata was requested but the Store doesn't support it
             if use_consolidated:
@@ -532,144 +531,58 @@ class AsyncGroup:
         if (zarr_format == 2 or zarr_format is None) and isinstance(use_consolidated, str):
             consolidated_key = use_consolidated
 
-        if zarr_format == 2:
-            paths = [store_path / ZGROUP_JSON, store_path / ZATTRS_JSON]
-            if use_consolidated or use_consolidated is None:
-                paths.append(store_path / consolidated_key)
+        # Decide whether to use HighLevelStore or legacy consolidated metadata path
+        # Priority:
+        # 1. If use_consolidated=False, always use HighLevelStore
+        # 2. If use_consolidated=True, always use legacy path (with consolidated metadata)
+        # 3. If use_consolidated=None (default), check if consolidated metadata exists:
+        #    - If it exists, use legacy path to load it
+        #    - If it doesn't exist, use HighLevelStore
 
-            zgroup_bytes, zattrs_bytes, *rest = await asyncio.gather(
-                *[path.get() for path in paths]
+        # Store is always a HighLevelStore (ensured by make_store_path)
+        # zarr_format was already passed to make_store_path, so HighLevelStore is configured
+        hl_store = store_path.store
+        assert isinstance(hl_store, HighLevelStore)
+
+        # Determine if we should use the legacy consolidated metadata path
+        # This is only needed when consolidated metadata is explicitly requested or detected
+        consolidated_exists = False
+
+        if use_consolidated is not False:
+            # Only check if user didn't explicitly opt out
+            # Use HighLevelStore to check for consolidated metadata
+            consolidated_exists = await hl_store.has_consolidated_metadata(
+                store_path.path, consolidated_key=consolidated_key
             )
-            if zgroup_bytes is None:
-                raise FileNotFoundError(store_path)
 
-            if use_consolidated or use_consolidated is None:
-                maybe_consolidated_metadata_bytes = rest[0]
+        # Use HighLevelStore to get metadata with proper consolidated metadata handling
+        from zarr.errors import ContainsArrayError, NodeTypeValidationError
 
+        try:
+            # Determine the actual use_consolidated parameter to pass to HighLevelStore
+            # - If use_consolidated=False, we want to strip consolidated metadata
+            # - If use_consolidated=True, we require consolidated metadata
+            # - If use_consolidated=None and consolidated_exists, we use it
+            # - If use_consolidated=None and not consolidated_exists, we pass False to strip any consolidated metadata
+            if use_consolidated is None:
+                # Auto-detect: use consolidated metadata if it exists
+                actual_use_consolidated = True if consolidated_exists else False
             else:
-                maybe_consolidated_metadata_bytes = None
+                actual_use_consolidated = use_consolidated
 
-        elif zarr_format == 3:
-            zarr_json_bytes = await (store_path / ZARR_JSON).get()
-            if zarr_json_bytes is None:
-                raise FileNotFoundError(store_path)
-        elif zarr_format is None:
-            (
-                zarr_json_bytes,
-                zgroup_bytes,
-                zattrs_bytes,
-                maybe_consolidated_metadata_bytes,
-            ) = await asyncio.gather(
-                (store_path / ZARR_JSON).get(),
-                (store_path / ZGROUP_JSON).get(),
-                (store_path / ZATTRS_JSON).get(),
-                (store_path / str(consolidated_key)).get(),
-            )
-            if zarr_json_bytes is not None and zgroup_bytes is not None:
-                # warn and favor v3
-                msg = f"Both zarr.json (Zarr format 3) and .zgroup (Zarr format 2) metadata objects exist at {store_path}. Zarr format 3 will be used."
-                warnings.warn(msg, category=ZarrUserWarning, stacklevel=1)
-            if zarr_json_bytes is None and zgroup_bytes is None:
-                raise FileNotFoundError(
-                    f"could not find zarr.json or .zgroup objects in {store_path}"
-                )
-            # set zarr_format based on which keys were found
-            if zarr_json_bytes is not None:
-                zarr_format = 3
-            else:
-                zarr_format = 2
-        else:
-            msg = f"Invalid value for 'zarr_format'. Expected 2, 3, or None. Got '{zarr_format}'."  # type: ignore[unreachable]
-            raise MetadataValidationError(msg)
-
-        if zarr_format == 2:
-            # this is checked above, asserting here for mypy
-            assert zgroup_bytes is not None
-
-            if use_consolidated and maybe_consolidated_metadata_bytes is None:
-                # the user requested consolidated metadata, but it was missing
-                raise ValueError(consolidated_key)
-
-            elif use_consolidated is False:
-                # the user explicitly opted out of consolidated_metadata.
-                # Discard anything we might have read.
-                maybe_consolidated_metadata_bytes = None
-
-            return cls._from_bytes_v2(
-                store_path, zgroup_bytes, zattrs_bytes, maybe_consolidated_metadata_bytes
-            )
-        else:
-            # V3 groups are comprised of a zarr.json object
-            assert zarr_json_bytes is not None
-            if not isinstance(use_consolidated, bool | None):
-                raise TypeError("use_consolidated must be a bool or None for Zarr format 3.")
-
-            return cls._from_bytes_v3(
-                store_path,
-                zarr_json_bytes,
-                use_consolidated=use_consolidated,
+            group_metadata = await hl_store.open_group_metadata(
+                store_path.path,
+                use_consolidated=actual_use_consolidated,
+                consolidated_key=consolidated_key,
             )
 
-    @classmethod
-    def _from_bytes_v2(
-        cls,
-        store_path: StorePath,
-        zgroup_bytes: Buffer,
-        zattrs_bytes: Buffer | None,
-        consolidated_metadata_bytes: Buffer | None,
-    ) -> AsyncGroup:
-        # V2 groups are comprised of a .zgroup and .zattrs objects
-        zgroup = json.loads(zgroup_bytes.to_bytes())
-        zattrs = json.loads(zattrs_bytes.to_bytes()) if zattrs_bytes is not None else {}
-        group_metadata = {**zgroup, "attributes": zattrs}
-
-        if consolidated_metadata_bytes is not None:
-            v2_consolidated_metadata = json.loads(consolidated_metadata_bytes.to_bytes())
-            v2_consolidated_metadata = v2_consolidated_metadata["metadata"]
-            # We already read zattrs and zgroup. Should we ignore these?
-            v2_consolidated_metadata.pop(".zattrs", None)
-            v2_consolidated_metadata.pop(".zgroup", None)
-
-            consolidated_metadata: defaultdict[str, dict[str, Any]] = defaultdict(dict)
-
-            # keys like air/.zarray, air/.zattrs
-            for k, v in v2_consolidated_metadata.items():
-                path, kind = k.rsplit("/.", 1)
-
-                if kind == "zarray":
-                    consolidated_metadata[path].update(v)
-                elif kind == "zattrs":
-                    consolidated_metadata[path]["attributes"] = v
-                elif kind == "zgroup":
-                    consolidated_metadata[path].update(v)
-                else:
-                    raise ValueError(f"Invalid file type '{kind}' at path '{path}")
-
-            group_metadata["consolidated_metadata"] = {
-                "metadata": dict(consolidated_metadata),
-                "kind": "inline",
-                "must_understand": False,
-            }
-
-        return cls.from_dict(store_path, group_metadata)
-
-    @classmethod
-    def _from_bytes_v3(
-        cls,
-        store_path: StorePath,
-        zarr_json_bytes: Buffer,
-        use_consolidated: bool | None,
-    ) -> AsyncGroup:
-        group_metadata = json.loads(zarr_json_bytes.to_bytes())
-        if use_consolidated and group_metadata.get("consolidated_metadata") is None:
-            msg = f"Consolidated metadata requested with 'use_consolidated=True' but not found in '{store_path.path}'."
-            raise ValueError(msg)
-
-        elif use_consolidated is False:
-            # Drop consolidated metadata if it's there.
-            group_metadata.pop("consolidated_metadata", None)
-
-        return cls.from_dict(store_path, group_metadata)
+            return cls(metadata=group_metadata, store_path=store_path)
+        except NodeTypeValidationError as e:
+            # Convert NodeTypeValidationError to ContainsArrayError for API compatibility
+            raise ContainsArrayError(f"An array already exists at {store_path.path!r}") from e
+        except FileNotFoundError:
+            # Group doesn't exist
+            raise
 
     @classmethod
     def from_dict(
@@ -907,10 +820,16 @@ class AsyncGroup:
             kwargs["_count_arrays"] = count_arrays
             kwargs["_count_groups"] = count_groups
 
+        store = self.store_path.store
+        if isinstance(store, HighLevelStore):
+            store_type = type(store.store).__name__
+        else:
+            store_type = type(store).__name__
+
         return GroupInfo(
             _name=self.store_path.path,
             _read_only=self.read_only,
-            _store_type=type(self.store_path.store).__name__,
+            _store_type=store_type,
             _zarr_format=self.metadata.zarr_format,
             # maybe do a typeddict
             **kwargs,  # type: ignore[arg-type]
@@ -3530,33 +3449,89 @@ async def _iter_members(
     tuple[str, AsyncArray[ArrayV3Metadata] | AsyncArray[ArrayV2Metadata] | AsyncGroup]
     """
 
-    # retrieve keys from storage
-    keys = [key async for key in node.store.list_dir(node.path)]
-    keys_filtered = tuple(filter(lambda v: v not in skip_keys, keys))
+    # Use HighLevelStore to efficiently list children with metadata
+    from zarr.storage import HighLevelStore
 
-    node_tasks = tuple(
-        asyncio.create_task(_getitem_semaphore(node, key, semaphore), name=key)
-        for key in keys_filtered
-    )
+    hl_store = node.store_path.store
+    assert isinstance(hl_store, HighLevelStore)
 
-    for fetched_node_coro in asyncio.as_completed(node_tasks):
-        try:
-            fetched_node = await fetched_node_coro
-        except KeyError as e:
-            # keyerror is raised when `key` names an object (in the object storage sense),
-            # as opposed to a prefix, in the store under the prefix associated with this group
-            # in which case `key` cannot be the name of a sub-array or sub-group.
-            warnings.warn(
-                f"Object at {e.args[0]} is not recognized as a component of a Zarr hierarchy.",
-                ZarrUserWarning,
-                stacklevel=1,
+    async def _create_node(
+        child_name: str, node_info: Any
+    ) -> tuple[str, AsyncArray[ArrayV3Metadata] | AsyncArray[ArrayV2Metadata] | AsyncGroup]:
+        """Helper to create array or group from NodeInfo."""
+        child_path = node.store_path / child_name
+
+        if node_info.node_type == "array":
+            # Create array from metadata
+            return child_name, AsyncArray(
+                metadata=node_info.metadata.to_dict(),
+                store_path=child_path,
             )
-            continue
-        match fetched_node:
-            case AsyncArray() | AsyncGroup():
-                yield fetched_node.basename, fetched_node
-            case _:
-                raise ValueError(f"Unexpected type: {type(fetched_node)}")
+        else:
+            # Create group from metadata
+            return child_name, AsyncGroup(
+                metadata=node_info.metadata,
+                store_path=child_path,
+            )
+
+    # Check if this group has consolidated metadata
+    if node.metadata.consolidated_metadata is not None:
+        # List children from consolidated metadata
+        consolidated_children = set(node.metadata.consolidated_metadata.metadata.keys())
+
+        # Also check what's actually in the store to detect mismatches
+        store_children = set()
+        async for child_name, _ in hl_store.list_children_with_metadata(node.store_path.path):
+            store_children.add(child_name)
+
+        # Warn about children in store but not in consolidated metadata
+        extra_children = store_children - consolidated_children
+        if extra_children:
+            import warnings
+
+            from zarr.errors import ZarrUserWarning
+
+            for child_name in sorted(extra_children):
+                warnings.warn(
+                    f"Object at '{child_name}' not found in consolidated metadata but exists in store",
+                    ZarrUserWarning,
+                    stacklevel=4,
+                )
+
+        # Yield only children from consolidated metadata
+        for child_name in consolidated_children:
+            try:
+                child_node = await node.getitem(child_name)
+                yield child_name, child_node
+            except KeyError:
+                # If the node can't be loaded, skip it
+                continue
+    else:
+        # No consolidated metadata - use HighLevelStore to list children
+        # Note: skip_keys filtering and concurrency control are handled inside list_children_with_metadata
+        async for child_name, node_info in hl_store.list_children_with_metadata(
+            node.store_path.path
+        ):
+            child_path = node.store_path / child_name
+
+            if node_info.node_type == "array":
+                # Create array from metadata
+                yield (
+                    child_name,
+                    AsyncArray(
+                        metadata=node_info.metadata.to_dict(),
+                        store_path=child_path,
+                    ),
+                )
+            else:
+                # Create group from metadata
+                yield (
+                    child_name,
+                    AsyncGroup(
+                        metadata=node_info.metadata,
+                        store_path=child_path,
+                    ),
+                )
 
 
 async def _iter_members_deep(
