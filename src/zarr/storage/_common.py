@@ -21,10 +21,23 @@ from zarr.core.common import (
     AccessModeLiteral,
     ZarrFormat,
 )
-from zarr.errors import ContainsArrayAndGroupError, ContainsArrayError, ContainsGroupError
+from zarr.errors import (
+    ContainsArrayAndGroupError,
+    ContainsArrayError,
+    ContainsGroupError,
+    URLPipelineError,
+)
 from zarr.storage._local import LocalStore
 from zarr.storage._memory import ManagedMemoryStore, MemoryStore
 from zarr.storage._utils import _join_paths, normalize_path, parse_store_url
+
+
+def _is_url_pipeline(url: str) -> bool:
+    """Whether a string store should be routed through the URL pipeline machinery."""
+    from zarr.storage._url_pipeline import is_url_pipeline
+
+    return is_url_pipeline(url)
+
 
 _has_fsspec = importlib.util.find_spec("fsspec")
 if _has_fsspec:
@@ -47,14 +60,22 @@ class StorePath:
         The store to use.
     path : str
         The path within the store.
+
+    Attributes
+    ----------
+    zarr_format : ZarrFormat | None
+        Zarr format selected by a `zarr2:`/`zarr3:` URL pipeline segment,
+        or None. Not part of the StorePath's identity (ignored by `__eq__`).
     """
 
     store: Store
     path: str
+    zarr_format: ZarrFormat | None
 
     def __init__(self, store: Store, path: str = "") -> None:
         self.store = store
         self.path = normalize_path(path)
+        self.zarr_format = None
 
     @property
     def read_only(self) -> bool:
@@ -348,6 +369,17 @@ async def make_store(
     """
     from zarr.storage._fsspec import FsspecStore  # circular import
 
+    if isinstance(store_like, str) and _is_url_pipeline(store_like):
+        from zarr.storage._url_pipeline import resolve_pipeline
+
+        result = await resolve_pipeline(store_like, mode=mode, storage_options=storage_options)
+        if result.path:
+            raise URLPipelineError(
+                f"the URL pipeline {store_like!r} resolves to a path inside a store; "
+                "use zarr.open() or make_store_path() instead of make_store()"
+            )
+        return result.store
+
     # Parse URL early so we can reuse the result for both validation and routing
     parsed = parse_store_url(store_like) if isinstance(store_like, str) else None
 
@@ -466,6 +498,15 @@ async def make_store_path(
         raise ValueError(
             "'path' was provided but is not used for FSMap store_like objects. Specify the path when creating the FSMap instance instead."
         )
+
+    elif isinstance(store_like, str) and _is_url_pipeline(store_like):
+        from zarr.storage._url_pipeline import resolve_pipeline
+
+        result = await resolve_pipeline(store_like, mode=mode, storage_options=storage_options)
+        combined_path = _join_paths([normalize_path(result.path), path_normalized])
+        store_path = await StorePath.open(result.store, path=combined_path, mode=mode)
+        store_path.zarr_format = result.zarr_format
+        return store_path
 
     else:
         store = await make_store(store_like, mode=mode, storage_options=storage_options)
