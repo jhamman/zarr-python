@@ -5,11 +5,11 @@ Importing this module is cheap and has no side effects: third-party adapters
 (registered through the `zarr.url_adapters` entry-point group) are loaded
 only when a pipeline URL naming their scheme is actually resolved.
 
-The `|` character is reserved as the pipeline delimiter in every string
-store specification: a string containing `|` is always routed through the
-pipeline machinery, and no percent-escape is decoded. To address a local
-file whose *name* contains `|` (or `#`), pass a `pathlib.Path` instead of a
-string.
+A string is never interpreted as a pipeline on its own: the user wraps it
+in a [`URLPipeline`][zarr.storage.URLPipeline] (or calls `zarr.open_url`),
+and that object is what the `StoreLike` machinery resolves. Plain string
+store specifications, including local paths that happen to contain `|`,
+keep their pre-existing meaning. No percent-escape is decoded.
 
 As a zarr-python extension to the specification (which requires the root
 sub-URL of an absolute pipeline to carry a scheme), the root sub-URL may be
@@ -33,13 +33,18 @@ from zarr.abc.url_pipeline import (
 from zarr.errors import URLPipelineError
 from zarr.registry import get_url_adapter, list_url_adapter_schemes
 from zarr.storage._memory import ManagedMemoryStore
-from zarr.storage._utils import parse_store_url
+from zarr.storage._utils import _join_paths, normalize_path, parse_store_url
 
 if TYPE_CHECKING:
     from zarr.abc.store import Store
-    from zarr.core.common import AccessModeLiteral
+    from zarr.core.common import AccessModeLiteral, ZarrFormat
 
-__all__ = ["is_url_pipeline", "parse_pipeline", "resolve_pipeline"]
+__all__ = ["URLPipeline", "parse_pipeline", "resolve_pipeline"]
+
+# Format segments are consumed by zarr-python itself rather than by a
+# registered adapter: they select the zarr format of the node the pipeline
+# addresses, and their body is a path to that node.
+_FORMAT_SCHEMES: dict[str, ZarrFormat] = {"zarr2": 2, "zarr3": 3}
 
 # Adapter scheme per RFC 3986 plus "." to permit vendor-prefixed
 # nonstandard schemes (e.g. "earthmover.myscheme").
@@ -137,6 +142,140 @@ def parse_pipeline(url: str) -> tuple[PipelineSegment, ...]:
     return tuple(segments)
 
 
+@dataclasses.dataclass(frozen=True)
+class URLPipeline:
+    """
+    A parsed URL pipeline, ready to be passed wherever a `StoreLike` is accepted.
+
+    Construct one with [`from_url`][zarr.storage.URLPipeline.from_url]. Because a
+    `URLPipeline` is an explicit object, no plain string store specification is
+    ever interpreted as a pipeline: `zarr.open("data|x.zarr")` still addresses a
+    local directory of that name, while
+    `zarr.open(URLPipeline.from_url("s3://bucket/data.zip|zip:|zarr3:"))` (or the
+    equivalent `zarr.open_url(...)`) resolves the pipeline through registered
+    adapters.
+
+    A pipeline is a value: instances are immutable, hashable, and compare equal
+    when they hold the same segments. Nothing is resolved until the pipeline is
+    opened; resolution needs the access mode and storage options of the open
+    call.
+
+    Attributes
+    ----------
+    segments : tuple[PipelineSegment, ...]
+        Every `|`-delimited sub-URL of the pipeline, in order: the root, any
+        adapter segments, and an optional trailing format segment.
+
+    Raises
+    ------
+    URLPipelineError
+        If there are no segments, if a format segment (`zarr2:`/`zarr3:`)
+        appears anywhere but last, or if a format segment carries a query.
+    """
+
+    segments: tuple[PipelineSegment, ...]
+
+    def __post_init__(self) -> None:
+        if not self.segments:
+            raise URLPipelineError("a URL pipeline needs at least one segment")
+        for segment in self.segments[1:-1]:
+            if segment.scheme in _FORMAT_SCHEMES:
+                raise URLPipelineError(
+                    f"the format segment {segment.raw!r} must be the last segment "
+                    f"of the URL pipeline {str(self)!r}"
+                )
+        format_segment = self._format_segment
+        if format_segment is not None and format_segment.query is not None:
+            raise URLPipelineError(
+                f"'{format_segment.scheme}:' segments do not accept a query: {format_segment.raw!r}"
+            )
+
+    @classmethod
+    def from_url(cls, url: str) -> URLPipeline:
+        """
+        Parse a URL pipeline string.
+
+        A URL without a `|` is a trivial pipeline consisting of its root alone.
+
+        Raises
+        ------
+        URLPipelineError
+            If the string cannot be parsed or the resulting pipeline is invalid
+            (see the class docstring).
+        """
+        return cls(parse_pipeline(url))
+
+    @property
+    def _format_segment(self) -> PipelineSegment | None:
+        last = self.segments[-1]
+        if len(self.segments) > 1 and last.scheme in _FORMAT_SCHEMES:
+            return last
+        return None
+
+    @property
+    def store_segments(self) -> tuple[PipelineSegment, ...]:
+        """
+        The segments that address a store: the root and any adapter segments,
+        i.e. `segments` without a trailing format segment.
+        """
+        if self._format_segment is None:
+            return self.segments
+        return self.segments[:-1]
+
+    @property
+    def zarr_format(self) -> ZarrFormat | None:
+        """The format selected by a trailing `zarr2:`/`zarr3:` segment, or None."""
+        format_segment = self._format_segment
+        if format_segment is None:
+            return None
+        return _FORMAT_SCHEMES[format_segment.scheme]
+
+    @property
+    def path(self) -> str:
+        """
+        The node path given as the body of a trailing format segment,
+        normalized. Empty when there is no format segment or its body is empty.
+        """
+        format_segment = self._format_segment
+        if format_segment is None:
+            return ""
+        return normalize_path(format_segment.body)
+
+    def resolve_zarr_format(self, zarr_format: ZarrFormat | None) -> ZarrFormat | None:
+        """
+        Combine the format selected by this pipeline with a caller-supplied one.
+
+        Parameters
+        ----------
+        zarr_format : ZarrFormat | None
+            The format requested by the caller, or None when unspecified.
+
+        Returns
+        -------
+        ZarrFormat | None
+            The pipeline's format when the caller did not specify one, otherwise
+            the caller's format. None when neither is set.
+
+        Raises
+        ------
+        ValueError
+            If the caller's format differs from the one selected by the pipeline.
+        """
+        pipeline_format = self.zarr_format
+        if pipeline_format is None:
+            return zarr_format
+        if zarr_format is not None and zarr_format != pipeline_format:
+            raise ValueError(
+                f"zarr_format={zarr_format} conflicts with the 'zarr{pipeline_format}:' "
+                f"segment of the URL pipeline {str(self)!r}; pass zarr_format=None to use "
+                "the pipeline's format"
+            )
+        return pipeline_format
+
+    def __str__(self) -> str:
+        return "|".join(segment.raw for segment in self.segments)
+
+
 def _root_routes_to_adapter(scheme: str) -> bool:
     """
     Whether a root sub-URL with this scheme is dispatched to a registered
@@ -149,22 +288,8 @@ def _root_routes_to_adapter(scheme: str) -> bool:
     )
 
 
-def is_url_pipeline(url: str) -> bool:
-    """
-    Whether `url` should be routed through the URL pipeline machinery.
-
-    True when the URL contains a `|` separator, or when its scheme has a
-    registered URL pipeline adapter (a *root adapter* such as `gh:`).
-    fsspec chained URLs (`zip::file://...`) and zarr's native `file:` /
-    `memory:` schemes are never routed to a root adapter.
-    """
-    if "|" in url:
-        return True
-    return _root_routes_to_adapter(_root_scheme(url))
-
-
 async def resolve_pipeline(
-    url: str,
+    url: str | URLPipeline,
     *,
     mode: AccessModeLiteral | None = None,
     storage_options: dict[str, Any] | None = None,
@@ -172,10 +297,17 @@ async def resolve_pipeline(
     """
     Resolve a URL pipeline into a store and a residual path.
 
+    The residual path joins the path returned by the adapters with the node
+    path of a trailing format segment (`...|zarr3:path/to/node`). The format
+    itself is not part of the resolution; read it from
+    [`URLPipeline.zarr_format`][zarr.storage.URLPipeline].
+
     Parameters
     ----------
-    url : str
-        A URL pipeline, e.g. `"s3://bucket/data.zip|zip:|zarr3:"`.
+    url : str | URLPipeline
+        A URL pipeline, e.g. `"s3://bucket/data.zip|zip:|zarr3:"`, or its
+        parsed form. A URL without `|` is a trivial pipeline consisting of
+        its root alone.
     mode : AccessModeLiteral | None
         The caller's access mode. `"r"` requires a read-only store; the
         resolver enforces this on whatever the final adapter returns.
@@ -187,8 +319,7 @@ async def resolve_pipeline(
     Raises
     ------
     URLPipelineError
-        If the URL cannot be parsed, is not a pipeline, names a scheme with
-        no registered adapter, names an adapter entry point that fails to
+        If the URL cannot be parsed, names a scheme with no registered adapter, names an adapter entry point that fails to
         import, or has a root sub-URL that cannot be resolved.
     TypeError
         If `storage_options` are passed to a root that does not accept them
@@ -197,13 +328,13 @@ async def resolve_pipeline(
         Errors from opening the root resource (e.g. a missing local directory
         in mode `"r"`) propagate unchanged, as for non-pipeline stores.
     """
-    segments = parse_pipeline(url)
-    if len(segments) == 1 and not _root_routes_to_adapter(segments[0].scheme):
-        raise URLPipelineError(
-            f"{url!r} is not a URL pipeline: it has no '|' separator and no "
-            f"URL pipeline adapter is registered for scheme {segments[0].scheme!r}"
+    pipeline = URLPipeline.from_url(url) if isinstance(url, str) else url
+    resolution = await _resolve(pipeline.store_segments, mode=mode, storage_options=storage_options)
+    if pipeline.path:
+        resolution = dataclasses.replace(
+            resolution, path=_join_paths([normalize_path(resolution.path), pipeline.path])
         )
-    return await _resolve(segments, mode=mode, storage_options=storage_options)
+    return resolution
 
 
 async def _resolve(
@@ -218,14 +349,7 @@ async def _resolve(
         )
 
     *preceding, last = segments
-    try:
-        adapter_cls = get_url_adapter(last.scheme)
-    except URLPipelineError as exc:
-        raise URLPipelineError(
-            f"{exc} Note: '|' is reserved as the URL pipeline delimiter; to "
-            "address a local file whose name contains '|', pass a "
-            "pathlib.Path instead of a string."
-        ) from None
+    adapter_cls = get_url_adapter(last.scheme)
 
     context = PipelineContext(
         preceding=tuple(preceding),

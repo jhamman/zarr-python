@@ -66,6 +66,7 @@ __all__ = [
     "open_consolidated",
     "open_group",
     "open_like",
+    "open_url",
     "save",
     "save_array",
     "save_group",
@@ -244,6 +245,60 @@ def open(
         return Array(obj)
     else:
         return Group(obj)
+
+
+def open_url(
+    url: str,
+    *,
+    mode: AccessModeLiteral | None = None,
+    zarr_format: ZarrFormat | None = None,
+    path: str | None = None,
+    storage_options: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> AnyArray | Group:
+    """Open a group or array addressed by a URL pipeline.
+
+    This is [`open`][zarr.open] with its `store` argument interpreted as a
+    [URL pipeline][user-guide-url-pipelines] string, i.e.
+    `zarr.open(URLPipeline.from_url(url), ...)`. It is the only entry point
+    that reads a string as a pipeline; `zarr.open` and the other
+    `StoreLike`-taking functions treat strings as they always have.
+
+    Parameters
+    ----------
+    url : str
+        A URL pipeline such as `"s3://bucket/data.zip|zip:|zarr3:"`. A URL
+        without `|` is a trivial pipeline consisting of its root alone.
+    mode : {'r', 'r+', 'a', 'w', 'w-'}, optional
+        Persistence mode, with the same meaning as for `zarr.open`.
+    zarr_format : {2, 3, None}, optional
+        The zarr format to use. None (the default) defers to a trailing
+        `zarr2:`/`zarr3:` segment of the pipeline; a value that conflicts
+        with such a segment raises `ValueError`.
+    path : str or None, optional
+        The path within the store to open, appended to any node path the
+        pipeline itself addresses.
+    storage_options : dict
+        Options for the pipeline's root sub-URL (e.g. fsspec options).
+    **kwargs
+        Additional parameters are passed through to `zarr.open_array` or
+        `zarr.open_group`.
+
+    Returns
+    -------
+    z : array or group
+        Return type depends on what exists in the given store.
+    """
+    from zarr.storage import URLPipeline
+
+    return open(
+        store=URLPipeline.from_url(url),
+        mode=mode,
+        zarr_format=zarr_format,
+        path=path,
+        storage_options=storage_options,
+        **kwargs,
+    )
 
 
 def open_consolidated(*args: Any, use_consolidated: Literal[True] = True, **kwargs: Any) -> Group:
@@ -866,7 +921,7 @@ def create_array(
     serializer: SerializerLike = "auto",
     fill_value: Any | None = DEFAULT_FILL_VALUE,
     order: MemoryOrder | None = None,
-    zarr_format: ZarrFormat | None = None,
+    zarr_format: ZarrFormat | None = 3,
     attributes: dict[str, JSON] | None = None,
     chunk_key_encoding: ChunkKeyEncodingLike | None = None,
     dimension_names: DimensionNamesLike = None,

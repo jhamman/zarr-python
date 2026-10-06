@@ -68,7 +68,7 @@ from zarr.errors import (
     ZarrUserWarning,
 )
 from zarr.storage import StoreLike, StorePath
-from zarr.storage._common import make_store_path
+from zarr.storage._common import make_store_path, resolve_zarr_format
 from zarr.storage._utils import _join_paths, _normalize_path_keys, normalize_path
 
 if TYPE_CHECKING:
@@ -531,10 +531,10 @@ class AsyncGroup:
         *,
         attributes: dict[str, Any] | None = None,
         overwrite: bool = False,
-        zarr_format: ZarrFormat | None = None,
+        zarr_format: ZarrFormat | None = 3,
     ) -> AsyncGroup:
+        zarr_format = resolve_zarr_format(store, zarr_format)
         store_path = await make_store_path(store)
-        zarr_format = store_path.resolve_zarr_format(zarr_format)
         if zarr_format is None:
             zarr_format = _default_zarr_format()
         attributes = attributes or {}
@@ -578,8 +578,8 @@ class AsyncGroup:
             (``.zmetadata`` by default). Specify the custom key as ``use_consolidated``
             to load consolidated metadata from a non-default key.
         """
+        zarr_format = resolve_zarr_format(store, zarr_format)
         store_path = await make_store_path(store)
-        zarr_format = store_path.resolve_zarr_format(zarr_format)
         if not store_path.store.supports_consolidated_metadata:
             # Fail if consolidated metadata was requested but the Store doesn't support it
             if use_consolidated:
@@ -1959,7 +1959,7 @@ class Group(SyncMixin):
         store: StoreLike,
         *,
         attributes: dict[str, Any] | None = None,
-        zarr_format: ZarrFormat | None = None,
+        zarr_format: ZarrFormat | None = 3,
         overwrite: bool = False,
     ) -> Group:
         """Instantiate a group from an initialized store.
@@ -1973,8 +1973,8 @@ class Group(SyncMixin):
         attributes : dict, optional
             A dictionary of JSON-serializable values with user-defined attributes.
         zarr_format : {2, 3, None}, optional
-            Zarr storage format version. If None, the format selected by a URL
-            pipeline segment is used, falling back to the configured default.
+            Zarr storage format version. None defers to the format selected by a
+            `URLPipeline` store, falling back to the configured default.
         overwrite : bool, optional
             If True, do not raise an error if the group already exists.
 

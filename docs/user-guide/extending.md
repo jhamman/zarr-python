@@ -112,7 +112,7 @@ class MyAdapter(URLPipelineAdapter):
     ) -> AdapterResolution:
         # A *wrapper* adapter opens the resource to its left and wraps it. Join the
         # preceding residual path with this segment's own path, and keep every other
-        # field (e.g. zarr_format) via dataclasses.replace.
+        # field via dataclasses.replace.
         preceding = await context.resolve_preceding()
         store = WrapperStore(preceding.store)
         path = "/".join(part.strip("/") for part in (preceding.path, segment.body) if part)
@@ -144,7 +144,8 @@ scheme as the entry-point name. Nonstandard schemes should be vendor-prefixed
 
 Adapters are loaded lazily, only when a pipeline naming their scheme is resolved. An
 adapter may also be used as a *root* scheme (e.g. `mypackage.myscheme://org/repo`), in
-which case `context.preceding` is empty. The returned store must honor
+which case `context.preceding` is empty; such a URL reaches the adapter only through
+`zarr.open_url` or a `URLPipeline`, never as a plain string store specification. The returned store must honor
 `context.read_only`, and `open_pipeline_segment` runs on zarr's internal event loop, so
 it must not block or call zarr's synchronous API. See
 [`zarr.abc.url_pipeline`][] for the full contract.
