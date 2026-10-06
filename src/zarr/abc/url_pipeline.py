@@ -16,10 +16,11 @@ using the URL scheme as the entry-point name.
 
 from __future__ import annotations
 
-import enum
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from typing_extensions import Sentinel
 
 from zarr.errors import URLPipelineError
 
@@ -35,11 +36,8 @@ __all__ = [
 ]
 
 
-class _Unset(enum.Enum):
-    token = 0
-
-
-_UNSET = _Unset.token
+_UNSET = Sentinel("_UNSET")
+"""Marks a `resolve_preceding` argument the adapter did not override."""
 
 
 @dataclass(frozen=True)
@@ -164,8 +162,8 @@ class PipelineContext:
     async def resolve_preceding(
         self,
         *,
-        mode: AccessModeLiteral | _Unset | None = _UNSET,
-        storage_options: dict[str, Any] | _Unset | None = _UNSET,
+        mode: AccessModeLiteral | _UNSET | None = _UNSET,
+        storage_options: dict[str, Any] | _UNSET | None = _UNSET,
     ) -> AdapterResolution:
         """
         Resolve the preceding pipeline into a store.
@@ -208,9 +206,9 @@ class PipelineContext:
             )
         return await _resolve(
             self.preceding,
-            mode=self.mode if isinstance(mode, _Unset) else mode,
+            mode=self.mode if mode is _UNSET else mode,
             storage_options=(
-                self.storage_options if isinstance(storage_options, _Unset) else storage_options
+                self.storage_options if storage_options is _UNSET else storage_options
             ),
         )
 

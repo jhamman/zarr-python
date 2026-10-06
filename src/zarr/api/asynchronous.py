@@ -63,7 +63,6 @@ from zarr.errors import (
     ArrayNotFoundError,
     GroupNotFoundError,
     NodeTypeValidationError,
-    URLPipelineError,
     ZarrDeprecationWarning,
     ZarrRuntimeWarning,
     ZarrUserWarning,
@@ -471,17 +470,11 @@ async def _resolve_creation_location(
 ) -> StorePath:
     """
     Resolve the location argument of the `create_v{2,3}_array` / `create_v{2,3}_group`
-    functions into a writable `StorePath`. A string is a URL pipeline and must carry
-    a scheme on its root; a pipeline must not select a different Zarr format.
+    functions into a writable `StorePath`. A string is a URL pipeline (so its root
+    carries a scheme); a pipeline must not select a different Zarr format.
     """
     if isinstance(location, str):
         location = URLPipeline.from_url(location)
-        if not location.segments[0].scheme:
-            raise URLPipelineError(
-                f"{str(location)!r} has no URL scheme on its root sub-URL. A string location "
-                "is a URL pipeline: spell a local path as an absolute 'file:' URL, and spell a "
-                "literal '|' in it as '%7C'."
-            )
     if isinstance(location, URLPipeline):
         # raises if the pipeline selects a different format
         location.resolve_zarr_format(zarr_format)
