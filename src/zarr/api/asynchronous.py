@@ -16,7 +16,9 @@ from zarr.core.array import (
     AsyncArray,
     CompressorLike,
     create_array,
+    default_compressor_v2,
     default_compressors_v3,
+    default_filters_v2,
     default_serializer_v3,
     from_array,
     get_array_metadata,
@@ -36,8 +38,10 @@ from zarr.core.common import (
     ZarrFormat,
     _default_zarr_format,
     _warn_write_empty_chunks_kwarg,
+    parse_order,
     parse_shapelike,
 )
+from zarr.core.config import config as zarr_config
 from zarr.core.dtype import ZDTypeLike, get_data_type_from_native_dtype, parse_data_type
 from zarr.core.dtype.common import HasItemSize
 from zarr.core.group import (
@@ -92,6 +96,8 @@ __all__ = [
     "create",
     "create_array",
     "create_hierarchy",
+    "create_v2_array",
+    "create_v2_group",
     "create_v3_array",
     "create_v3_group",
     "empty",
@@ -457,14 +463,16 @@ async def open(
         return await open_group(store=store_path, zarr_format=zarr_format, mode=mode, **kwargs)
 
 
-async def _resolve_v3_location(
+async def _resolve_creation_location(
     location: str | URLPipeline | Store | StorePath,
     storage_options: dict[str, Any] | None,
+    *,
+    zarr_format: ZarrFormat,
 ) -> StorePath:
     """
-    Resolve the location argument of `create_v3_array` / `create_v3_group` into a
-    writable `StorePath`. A string is a URL pipeline and must carry a scheme on
-    its root; a pipeline must not select Zarr format 2.
+    Resolve the location argument of the `create_v{2,3}_array` / `create_v{2,3}_group`
+    functions into a writable `StorePath`. A string is a URL pipeline and must carry
+    a scheme on its root; a pipeline must not select a different Zarr format.
     """
     if isinstance(location, str):
         location = URLPipeline.from_url(location)
@@ -476,11 +484,149 @@ async def _resolve_v3_location(
             )
     if isinstance(location, URLPipeline):
         # raises if the pipeline selects a different format
-        location.resolve_zarr_format(3)
+        location.resolve_zarr_format(zarr_format)
     store_path = await make_store_path(location, storage_options=storage_options)
     if store_path.read_only:
         raise ValueError(f"cannot create a node at {store_path}: the store is read-only")
     return store_path
+
+
+async def create_v2_array(
+    location: str | URLPipeline | Store | StorePath,
+    *,
+    shape: ShapeLike,
+    dtype: ZDTypeLike,
+    chunks: Iterable[int] | AUTO = AUTO,
+    fill_value: Any | AUTO = AUTO,
+    order: MemoryOrder | AUTO = AUTO,
+    dimension_separator: Literal[".", "/"] = ".",
+    compressor: CompressorLikev2 | AUTO = AUTO,
+    filters: Iterable[Numcodec | dict[str, JSON]] | AUTO | None = AUTO,
+    attributes: dict[str, JSON] | None = None,
+    overwrite: bool = False,
+    storage_options: dict[str, Any] | None = None,
+) -> AsyncArray[ArrayV2Metadata]:
+    """Create a Zarr format 2 array at a URL pipeline or store location.
+
+    The keyword arguments are the fields of the Zarr V2 array metadata document
+    (`.zarray`); this function does not abstract over Zarr formats. Fields left at
+    [`AUTO`][zarr.AUTO] are computed from the shape, the data type and the
+    configuration, while `None` keeps the meaning the metadata gives it.
+
+    Parameters
+    ----------
+    location : str | URLPipeline | Store | StorePath
+        Where to create the array. A string is always read as a
+        [URL pipeline][user-guide-url-pipelines] whose root carries a URL scheme,
+        e.g. `"file:/data/example.zarr|zarr2:group/array"`: the body of a trailing
+        `zarr2:` segment is the path of the array within the store, and a literal
+        `|` in a local path is spelled `%7C`. A `URLPipeline` is the parsed form of
+        such a string. A `Store` addresses its root; a `StorePath` addresses a path
+        within a store. A `zarr3:` segment raises `ValueError`.
+    shape : tuple[int, ...]
+        Shape of the array.
+    dtype : ZDTypeLike
+        Data type of the array.
+    chunks : Iterable[int] | AUTO, optional
+        The chunk shape, one integer per dimension. By default, guessed from the
+        shape and data type. Zarr format 2 has no rectilinear chunk grids.
+    fill_value : Any | AUTO, optional
+        The fill value. By default, the data type's default scalar. `None` is stored
+        as `null`, meaning no fill value.
+    order : {'C', 'F'} | AUTO, optional
+        Memory layout of chunks. By default, the configured `array.order`.
+    dimension_separator : {'.', '/'}, optional
+        Separator between dimension indices in chunk keys. By default `.`.
+    compressor : dict[str, JSON] | Numcodec | None | AUTO, optional
+        The single compressor applied after the filters. By default, the configured
+        default compressor. `None` means no compressor.
+    filters : Iterable[Numcodec | dict[str, JSON]] | None | AUTO, optional
+        Filters applied in order before compression. By default, the data type's
+        object codec for variable-length data types and none otherwise. `None`
+        means no filters.
+    attributes : dict[str, JSON] | None, optional
+        User attributes. By default, empty.
+    overwrite : bool, optional
+        If True, delete any existing node at the location before creating the array.
+        Otherwise an existing array or group raises `ContainsArrayError` or
+        `ContainsGroupError`.
+    storage_options : dict[str, Any] | None, optional
+        Options for the root sub-URL of a URL pipeline (e.g. fsspec options). Not
+        accepted together with a `Store` or `StorePath`.
+
+    Returns
+    -------
+    AsyncArray
+        The new array.
+    """
+    store_path = await _resolve_creation_location(location, storage_options, zarr_format=2)
+    zdtype = parse_data_type(dtype, zarr_format=2)
+    shape_parsed = parse_shapelike(shape)
+
+    if chunks is AUTO:
+        item_size = zdtype.item_size if isinstance(zdtype, HasItemSize) else 1
+        grid = guess_chunks(shape_parsed, item_size)
+    else:
+        grid = normalize_chunks_nd(tuple(chunks), shape_parsed)
+    if not grid.is_regular:
+        raise ValueError("Zarr format 2 does not support rectilinear chunk grids.")
+
+    metadata = ArrayV2Metadata(
+        shape=shape_parsed,
+        dtype=zdtype,
+        chunks=grid.chunk_shape,
+        fill_value=zdtype.default_scalar() if fill_value is AUTO else fill_value,
+        order=parse_order(zarr_config.get("array.order")) if order is AUTO else order,
+        dimension_separator=dimension_separator,
+        compressor=default_compressor_v2(zdtype) if compressor is AUTO else compressor,
+        filters=default_filters_v2(zdtype) if filters is AUTO else filters,
+        attributes=attributes,
+    )
+    await save_new_metadata(store_path, metadata, overwrite=overwrite, ensure_parents=True)
+    return AsyncArray(metadata=metadata, store_path=store_path)
+
+
+async def create_v2_group(
+    location: str | URLPipeline | Store | StorePath,
+    *,
+    attributes: dict[str, JSON] | None = None,
+    overwrite: bool = False,
+    storage_options: dict[str, Any] | None = None,
+) -> AsyncGroup:
+    """Create a Zarr format 2 group at a URL pipeline or store location.
+
+    The keyword arguments are the fields of the Zarr V2 group metadata documents
+    (`.zgroup` and `.zattrs`); this function does not abstract over Zarr formats.
+
+    Parameters
+    ----------
+    location : str | URLPipeline | Store | StorePath
+        Where to create the group. A string is always read as a
+        [URL pipeline][user-guide-url-pipelines] whose root carries a URL scheme,
+        e.g. `"file:/data/example.zarr|zarr2:group"`: the body of a trailing
+        `zarr2:` segment is the path of the group within the store, and a literal
+        `|` in a local path is spelled `%7C`. A `URLPipeline` is the parsed form of
+        such a string. A `Store` addresses its root; a `StorePath` addresses a path
+        within a store. A `zarr3:` segment raises `ValueError`.
+    attributes : dict[str, JSON] | None, optional
+        User attributes. By default, empty.
+    overwrite : bool, optional
+        If True, delete any existing node at the location before creating the group.
+        Otherwise an existing array or group raises `ContainsArrayError` or
+        `ContainsGroupError`.
+    storage_options : dict[str, Any] | None, optional
+        Options for the root sub-URL of a URL pipeline (e.g. fsspec options). Not
+        accepted together with a `Store` or `StorePath`.
+
+    Returns
+    -------
+    AsyncGroup
+        The new group.
+    """
+    store_path = await _resolve_creation_location(location, storage_options, zarr_format=2)
+    metadata = GroupMetadata(attributes={} if attributes is None else attributes, zarr_format=2)
+    await save_new_metadata(store_path, metadata, overwrite=overwrite, ensure_parents=True)
+    return AsyncGroup(metadata=metadata, store_path=store_path)
 
 
 async def create_v3_array(
@@ -551,7 +697,7 @@ async def create_v3_array(
     AsyncArray
         The new array.
     """
-    store_path = await _resolve_v3_location(location, storage_options)
+    store_path = await _resolve_creation_location(location, storage_options, zarr_format=3)
     zdtype = parse_data_type(data_type, zarr_format=3)
     shape_parsed = parse_shapelike(shape)
 
@@ -631,7 +777,7 @@ async def create_v3_group(
     AsyncGroup
         The new group.
     """
-    store_path = await _resolve_v3_location(location, storage_options)
+    store_path = await _resolve_creation_location(location, storage_options, zarr_format=3)
     metadata = GroupMetadata(attributes={} if attributes is None else attributes, zarr_format=3)
     await save_new_metadata(store_path, metadata, overwrite=overwrite, ensure_parents=True)
     return AsyncGroup(metadata=metadata, store_path=store_path)

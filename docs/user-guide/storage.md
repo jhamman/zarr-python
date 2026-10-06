@@ -136,9 +136,10 @@ Only these two entry points read a string as a pipeline. Plain string store
 specifications keep their existing meaning everywhere else, so a local path that
 happens to contain `|` still names a directory, whatever adapters are installed.
 Unlike `zarr.open`, `zarr.open_url` never creates or overwrites. To create a node at a
-pipeline-addressed location, use [`zarr.create_v3_array`][] or [`zarr.create_v3_group`][],
-which read a string location as a pipeline and take the Zarr V3 metadata fields as keyword
-arguments, or pass the `URLPipeline` to `zarr.create_array` / `zarr.create_group`:
+pipeline-addressed location, use [`zarr.create_v3_array`][] / [`zarr.create_v3_group`][]
+(or their Zarr format 2 counterparts [`zarr.create_v2_array`][] / [`zarr.create_v2_group`][]),
+which read a string location as a pipeline and take that format's metadata fields as
+keyword arguments, or pass the `URLPipeline` to `zarr.create_array` / `zarr.create_group`:
 
 ```python exec="true" session="storage" source="above" result="ansi"
 arr = zarr.create_v3_array(
