@@ -126,10 +126,11 @@ inner adapter sees the outer one's residual path `a` and the pipeline resolves t
 import asyncio
 
 from zarr.registry import register_url_adapter
-from zarr.storage import resolve_pipeline
+from zarr.storage import URLPipeline
 
 register_url_adapter("mypackage.myscheme", MyAdapter)
-resolution = asyncio.run(resolve_pipeline("memory://x|mypackage.myscheme:a|mypackage.myscheme:b"))
+pipeline = URLPipeline.from_url("memory://x|mypackage.myscheme:a|mypackage.myscheme:b")
+resolution = asyncio.run(pipeline.resolve())
 assert resolution.path == "a/b"
 ```
 

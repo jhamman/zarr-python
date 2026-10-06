@@ -29,7 +29,7 @@ from zarr.errors import (
 )
 from zarr.storage._local import LocalStore
 from zarr.storage._memory import ManagedMemoryStore, MemoryStore
-from zarr.storage._url_pipeline import URLPipeline, resolve_pipeline
+from zarr.storage._url_pipeline import URLPipeline
 from zarr.storage._utils import UPath, _join_paths, normalize_path, parse_store_url
 
 _has_fsspec = importlib.util.find_spec("fsspec")
@@ -360,7 +360,7 @@ async def make_store(
     _read_only = mode == "r"
 
     if isinstance(store_like, URLPipeline):
-        result = await resolve_pipeline(store_like, mode=mode, storage_options=storage_options)
+        result = await store_like.resolve(mode=mode, storage_options=storage_options)
         if normalize_path(result.path):
             result.store.close()
             raise URLPipelineError(
@@ -486,7 +486,7 @@ async def make_store_path(
     path_normalized = normalize_path(path)
 
     if isinstance(store_like, URLPipeline):
-        result = await resolve_pipeline(store_like, mode=mode, storage_options=storage_options)
+        result = await store_like.resolve(mode=mode, storage_options=storage_options)
         combined_path = _join_paths([normalize_path(result.path), path_normalized])
         return await StorePath.open(result.store, path=combined_path, mode=mode)
 

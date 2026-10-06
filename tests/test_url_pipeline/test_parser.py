@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sys
-
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -74,16 +72,12 @@ def test_empty_query() -> None:
     assert segment.query == ""
 
 
-def test_windows_drive_path_is_not_a_scheme() -> None:
-    # On Windows parse_store_url treats C:\... as a local path; elsewhere the
-    # single-letter scheme is preserved but must not crash the parser.
+def test_single_letter_scheme_is_a_scheme_everywhere() -> None:
+    """A drive-letter-like prefix is a URL scheme on every platform; bare Windows paths are not pipelines."""
     (segment,) = parse_pipeline(r"C:\data\store")
+    assert segment.scheme == "c"
+    assert segment.body == r"\data\store"
     assert segment.raw == r"C:\data\store"
-    if sys.platform == "win32":
-        assert segment.scheme == ""
-        assert segment.body == r"C:\data\store"
-    else:
-        assert segment.scheme == "c"
 
 
 @pytest.mark.parametrize("url", ["a||b:", "|zip:", "file:/tmp|", ""])
@@ -104,10 +98,9 @@ def test_invalid_adapter_scheme_rejected(segment: str) -> None:
 
 
 def test_single_letter_scheme_with_exotic_authority() -> None:
-    # single-letter candidates are delegated to parse_store_url, which may
-    # reject an exotic authority; the raw scheme is used as the fallback
+    """Scheme detection works on the raw text, so an authority urlparse would reject is no obstacle."""
     segments = parse_pipeline("x://[authority]/path|zip:")
-    assert segments[0].scheme in ("", "x")
+    assert segments[0].scheme == "x"
     assert segments[0].raw == "x://[authority]/path"
 
 

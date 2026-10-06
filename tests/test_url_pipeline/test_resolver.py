@@ -29,7 +29,6 @@ from zarr.registry import (
 )
 from zarr.storage import LocalStore, ManagedMemoryStore, MemoryStore, URLPipeline, WrapperStore
 from zarr.storage._common import _has_fsspec, make_store, make_store_path
-from zarr.storage._url_pipeline import resolve_pipeline
 from zarr.storage._utils import _join_paths
 
 # fsspec < 2024.12.0 has no AsyncFileSystemWrapper, so a plain memory:// URL
@@ -140,7 +139,9 @@ class TestRegistry:
 
     @pytest.mark.usefixtures("set_path")
     async def test_entrypoint_end_to_end(self) -> None:
-        result = await resolve_pipeline("memory://src|example-pkg.entrypoint-scheme:sub/path")
+        result = await URLPipeline.from_url(
+            "memory://src|example-pkg.entrypoint-scheme:sub/path"
+        ).resolve()
         assert result.path == "sub/path"
 
     @pytest.mark.usefixtures("set_path")
@@ -353,7 +354,7 @@ class TestStringsAreNeverPipelines:
 class TestResolve:
     async def test_wrapper_adapter_chain(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:inner/path")
+        result = await URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:inner/path").resolve()
         assert isinstance(result.store, TracingStore)
         assert result.path == "inner/path"
         assert result.store.context.preceding_url == f"file:{tmp_path.as_posix()}"
@@ -364,25 +365,25 @@ class TestResolve:
         # each wrapper joins the preceding residual path with its own, so
         # no segment's path is lost in root|wrap:a|wrap:b
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:a|wrap:b")
+        result = await URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:a|wrap:b").resolve()
         assert result.path == "a/b"
 
     async def test_native_adapter_gets_preceding_url(self) -> None:
         register_url_adapter("native", NativeAdapter)
         NativeAdapter.seen_urls.clear()
-        await resolve_pipeline("s3://bucket/repo|native:")
+        await URLPipeline.from_url("s3://bucket/repo|native:").resolve()
         assert NativeAdapter.seen_urls == ["s3://bucket/repo"]
 
     async def test_multi_segment_preceding_url(self) -> None:
         register_url_adapter("wrap", WrapperAdapter)
         register_url_adapter("native", NativeAdapter)
         NativeAdapter.seen_urls.clear()
-        await resolve_pipeline("memory://base|wrap:a|native:x")
+        await URLPipeline.from_url("memory://base|wrap:a|native:x").resolve()
         assert NativeAdapter.seen_urls == ["memory://base|wrap:a"]
 
     async def test_root_adapter(self) -> None:
         register_url_adapter("rooty", RootAdapter)
-        result = await resolve_pipeline("rooty://org/repo")
+        result = await URLPipeline.from_url("rooty://org/repo").resolve()
         assert result.path == "org/repo"
         assert result.store.read_only
 
@@ -390,16 +391,16 @@ class TestResolve:
         register_url_adapter("rooty", RootAdapter)
         register_url_adapter("native", NativeAdapter)
         NativeAdapter.seen_urls.clear()
-        await resolve_pipeline("rooty://org/repo|native:x")
+        await URLPipeline.from_url("rooty://org/repo|native:x").resolve()
         assert NativeAdapter.seen_urls == ["rooty://org/repo"]
 
     async def test_read_only_flag(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:", mode="r")
+        result = await URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:").resolve(mode="r")
         assert isinstance(result.store, TracingStore)
         assert result.store.context.read_only
         assert result.store.context.mode == "r"
-        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:")
+        result = await URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:").resolve()
         assert isinstance(result.store, TracingStore)
         assert not result.store.context.read_only
         assert result.store.context.mode is None
@@ -408,7 +409,7 @@ class TestResolve:
         # the resolver downgrades a writable store returned under mode "r"
         # instead of trusting the adapter to have honored context.read_only
         register_url_adapter("bad", DisobedientAdapter)
-        result = await resolve_pipeline("memory://base|bad:", mode="r")
+        result = await URLPipeline.from_url("memory://base|bad:").resolve(mode="r")
         assert result.store.read_only
         store = await make_store(URLPipeline.from_url("memory://base|bad:"), mode="r")
         assert store.read_only
@@ -428,7 +429,7 @@ class TestResolve:
 
         register_url_adapter("stubborn", StubbornAdapter)
         with pytest.raises(URLPipelineError, match="does not support read-only conversion"):
-            await resolve_pipeline("memory://base|stubborn:", mode="r")
+            await URLPipeline.from_url("memory://base|stubborn:").resolve(mode="r")
 
     async def test_read_only_enforcement_failure_closes_store(self) -> None:
         # the adapter's store must not leak when it cannot be made read-only
@@ -451,7 +452,7 @@ class TestResolve:
 
         register_url_adapter("stubborn", StubbornAdapter)
         with pytest.raises(URLPipelineError):
-            await resolve_pipeline("memory://base|stubborn:", mode="r")
+            await URLPipeline.from_url("memory://base|stubborn:").resolve(mode="r")
         assert closed == [True]
 
     async def test_resolve_preceding_mode_override(self, tmp_path: Path) -> None:
@@ -467,7 +468,9 @@ class TestResolve:
                 return dataclasses.replace(preceding, path=segment.body)
 
         register_url_adapter("rowrap", ReadOnlyRootWrapper)
-        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|rowrap:x", mode="w")
+        result = await URLPipeline.from_url(f"file:{tmp_path.as_posix()}|rowrap:x").resolve(
+            mode="w"
+        )
         assert result.path == "x"
 
     async def test_wrapper_on_local_file_root_read_only(self, tmp_path: Path) -> None:
@@ -477,7 +480,7 @@ class TestResolve:
         target = tmp_path / "data.bin"
         target.write_bytes(b"payload")
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"file:{target.as_posix()}|wrap:", mode="r")
+        result = await URLPipeline.from_url(f"file:{target.as_posix()}|wrap:").resolve(mode="r")
         assert isinstance(result.store, TracingStore)
         assert result.store.read_only
 
@@ -496,7 +499,7 @@ class TestResolve:
         target = tmp_path / "data.bin"
         target.write_bytes(b"payload")
         register_url_adapter("wrap", WrapperAdapter)
-        await resolve_pipeline(f"file:{target.as_posix()}|wrap:", mode=mode)
+        await URLPipeline.from_url(f"file:{target.as_posix()}|wrap:").resolve(mode=mode)
 
     async def test_resolve_preceding_storage_options_override(self, tmp_path: Path) -> None:
         # an adapter that consumed its namespaced keys strips them before
@@ -516,8 +519,7 @@ class TestResolve:
         register_url_adapter("consuming", ConsumingWrapper)
         # the local-path root rejects any surviving storage_options, so this
         # passing proves the adapter's keys were stripped before resolution
-        result = await resolve_pipeline(
-            f"file:{tmp_path.as_posix()}|consuming:x",
+        result = await URLPipeline.from_url(f"file:{tmp_path.as_posix()}|consuming:x").resolve(
             storage_options={"consuming_secret": "s3cr3t"},
         )
         assert result.path == "x"
@@ -538,44 +540,44 @@ class TestResolve:
 
         register_url_adapter("probe", OptionsProbe)
         opts = {"anon": True}
-        await resolve_pipeline("s3://bucket/x|probe:", storage_options=opts)
+        await URLPipeline.from_url("s3://bucket/x|probe:").resolve(storage_options=opts)
         assert OptionsProbe.seen_options == opts
 
     async def test_wrapper_at_root_position_raises(self) -> None:
         # a wrapper adapter used as the pipeline root has nothing to wrap
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(URLPipelineError, match="no preceding sub-URL"):
-            await resolve_pipeline("wrap:whatever")
+            await URLPipeline.from_url("wrap:whatever").resolve()
 
     async def test_single_url_is_a_trivial_pipeline(self) -> None:
         """A URL without `|` resolves as a pipeline consisting of its root alone."""
-        result = await resolve_pipeline("memory://plain")
+        result = await URLPipeline.from_url("memory://plain").resolve()
         assert isinstance(result.store, ManagedMemoryStore)
         assert result.path == ""
 
-    async def test_accepts_pipeline_object(self, tmp_path: Path) -> None:
-        """`resolve_pipeline` takes a parsed `URLPipeline` as well as a string."""
+    async def test_resolve_method(self, tmp_path: Path) -> None:
+        """`URLPipeline.resolve` yields the adapter's store and residual path."""
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:a"))
+        result = await URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:a").resolve()
         assert isinstance(result.store, TracingStore)
         assert result.path == "a"
 
     async def test_format_segment_path_joins_residual_path(self, tmp_path: Path) -> None:
         """The node path of a trailing format segment extends the adapters' residual path."""
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:a|zarr3:b")
+        result = await URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:a|zarr3:b").resolve()
         assert result.path == "a/b"
 
     async def test_unknown_adapter_scheme_raises(self) -> None:
         with pytest.raises(URLPipelineError, match="no URL pipeline adapter is registered"):
-            await resolve_pipeline("memory://base|no-such-adapter:")
+            await URLPipeline.from_url("memory://base|no-such-adapter:").resolve()
 
     async def test_base_case_value_error_is_wrapped(self) -> None:
         # a root that only the fallback scheme detection accepts must not
         # leak urlparse's ValueError out of the base case
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(URLPipelineError, match="could not resolve the pipeline root"):
-            await resolve_pipeline("vendor.x://[authority]/path|wrap:")
+            await URLPipeline.from_url("vendor.x://[authority]/path|wrap:").resolve()
 
 
 class TestSpecRoots:
@@ -584,7 +586,7 @@ class TestSpecRoots:
     @pytest.mark.parametrize("root", ["memory:", "memory:/", "memory://"])
     async def test_memory_root_spellings_equivalent(self, root: str) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"{root}|wrap:")
+        result = await URLPipeline.from_url(f"{root}|wrap:").resolve()
         assert isinstance(result.store, TracingStore)
         inner = result.store._store
         assert isinstance(inner, ManagedMemoryStore)
@@ -594,7 +596,7 @@ class TestSpecRoots:
     @pytest.mark.parametrize("root", ["memory:a/b", "memory:/a/b", "memory://a/b"])
     async def test_memory_root_named_spellings_equivalent(self, root: str) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"{root}|wrap:")
+        result = await URLPipeline.from_url(f"{root}|wrap:").resolve()
         assert isinstance(result.store, TracingStore)
         inner = result.store._store
         assert isinstance(inner, ManagedMemoryStore)
@@ -611,12 +613,12 @@ class TestSpecRoots:
     async def test_memory_root_rejects_query(self) -> None:
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(URLPipelineError, match="do not accept a query"):
-            await resolve_pipeline("memory:a?opt=1|wrap:")
+            await URLPipeline.from_url("memory:a?opt=1|wrap:").resolve()
 
     async def test_memory_root_rejects_storage_options(self) -> None:
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(TypeError, match="'storage_options' was provided but unused"):
-            await resolve_pipeline("memory:a|wrap:", storage_options={"anon": True})
+            await URLPipeline.from_url("memory:a|wrap:").resolve(storage_options={"anon": True})
 
     async def test_file_root_localhost_authority(self, tmp_path: Path) -> None:
         # file://localhost/p and file:///p are equivalent to file:/p
@@ -642,26 +644,26 @@ class TestSpecRoots:
             # chdir into tmp so it is created there
             monkeypatch.chdir(tmp_path)
             drive_path = "C:/drive/data"
-        r1 = await resolve_pipeline(f"file:{drive_path}|wrap:")
-        r2 = await resolve_pipeline(f"file:///{drive_path}|wrap:")
+        r1 = await URLPipeline.from_url(f"file:{drive_path}|wrap:").resolve()
+        r2 = await URLPipeline.from_url(f"file:///{drive_path}|wrap:").resolve()
         assert isinstance(r1.store, TracingStore)
         assert isinstance(r2.store, TracingStore)
 
     async def test_file_root_rejects_other_authority(self) -> None:
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(URLPipelineError, match="unsupported authority"):
-            await resolve_pipeline("file://example.com/tmp/x|wrap:")
+            await URLPipeline.from_url("file://example.com/tmp/x|wrap:").resolve()
 
     @pytest.mark.parametrize("root", ["file:relative/path", "file://localhost"])
     async def test_file_root_rejects_relative_paths(self, root: str) -> None:
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(URLPipelineError, match="absolute path"):
-            await resolve_pipeline(f"{root}|wrap:")
+            await URLPipeline.from_url(f"{root}|wrap:").resolve()
 
     async def test_file_root_rejects_query(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(URLPipelineError, match="do not accept a query"):
-            await resolve_pipeline(f"file:{tmp_path}?v=1|wrap:")
+            await URLPipeline.from_url(f"file:{tmp_path}?v=1|wrap:").resolve()
 
     @pytest.mark.skipif(
         not _has_async_fsspec_wrapper,
@@ -682,7 +684,7 @@ class TestSpecRoots:
         # documented divergence from RFC 8089: consistent with LocalStore, no
         # percent-escape is decoded, so %20 names a literal directory
         register_url_adapter("wrap", WrapperAdapter)
-        await resolve_pipeline(f"file:{tmp_path.as_posix()}/a%20b|wrap:")
+        await URLPipeline.from_url(f"file:{tmp_path.as_posix()}/a%20b|wrap:").resolve()
         assert (tmp_path / "a%20b").is_dir()
         assert not (tmp_path / "a b").exists()
 
