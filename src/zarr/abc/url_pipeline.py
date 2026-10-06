@@ -25,7 +25,7 @@ from zarr.errors import URLPipelineError
 
 if TYPE_CHECKING:
     from zarr.abc.store import Store
-    from zarr.core.common import AccessModeLiteral, ZarrFormat
+    from zarr.core.common import AccessModeLiteral
 
 __all__ = [
     "AdapterResolution",
@@ -50,8 +50,7 @@ class PipelineSegment:
     Attributes
     ----------
     scheme : str
-        The lowercased URL scheme. Empty string only for a schemeless root
-        (a bare local path), which is treated as opaque text.
+        The lowercased URL scheme.
     body : str
         The text after `scheme:` and before any `?`. Interpretation is
         scheme-defined; it is **not** URL-normalized, so case-significant
@@ -89,17 +88,17 @@ class AdapterResolution:
         Residual path *within* the store that the pipeline addresses
         (e.g. `"path/to/node"` for `...|icechunk://tag.v1/path/to/node`).
         Empty string when the pipeline addresses the store root.
-    zarr_format : ZarrFormat | None
-        Zarr format selected by a format segment (`zarr2:`/`zarr3:`),
-        or None if unspecified. A wrapper adapter that re-wraps a preceding
-        resolution must carry every field it does not change forward —
-        prefer `dataclasses.replace(preceding, store=..., path=...)` over
-        reconstructing, so fields added later are never silently dropped.
+
+    A wrapper adapter that re-wraps a preceding resolution must carry every
+    field it does not change forward: prefer
+    `dataclasses.replace(preceding, store=..., path=...)` over
+    reconstructing, so fields added later are never silently dropped.
+    Format segments (`zarr2:`/`zarr3:`) are not adapters; they are consumed
+    by [`URLPipeline`][zarr.storage.URLPipeline] before resolution.
     """
 
     store: Store
     path: str = ""
-    zarr_format: ZarrFormat | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -130,10 +129,6 @@ class PipelineContext:
         backends. An adapter that consumes keys should strip them before
         resolving the rest of the pipeline, by passing the reduced mapping
         to [`resolve_preceding`][zarr.abc.url_pipeline.PipelineContext.resolve_preceding].
-        Non-dict forms of the caller-facing `storage_options` argument are
-        reserved for future per-segment configuration (one mapping per
-        pipeline segment); this attribute will remain a single mapping —
-        the one addressed to this adapter's segment.
     """
 
     preceding: tuple[PipelineSegment, ...]

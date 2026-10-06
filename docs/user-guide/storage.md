@@ -100,8 +100,9 @@ print(group)
    group = zarr.open_group(UPath('s3://noaa-nwm-retro-v2-zarr-pds', anon=True), mode='r')
    ```
 
-- a [URL pipeline](#user-guide-url-pipelines) string containing `|`, such as
-  `s3://bucket/data.zip|zip:`, which is resolved through registered adapters.
+- a [`URLPipeline`][zarr.storage.URLPipeline], the parsed form of a
+  [URL pipeline](#user-guide-url-pipelines) such as `s3://bucket/data.zip|zip:`, which
+  is resolved through registered adapters. Strings are never interpreted as pipelines.
 
 - a [`Store`][zarr.abc.store.Store] or [`StorePath`][zarr.storage.StorePath] -
   see explicit store creation below.
@@ -114,28 +115,49 @@ sub-URL locates a resource with a conventional URL; each subsequent sub-URL name
 *adapter* that reinterprets everything to its left (e.g.
 `s3://bucket/data.zip|zip:|zarr3:`). Adapters are provided by packages through the
 `zarr.url_adapters` entry-point group — see
-[`zarr.abc.url_pipeline`][zarr.abc.url_pipeline] for the adapter interface. Builtin
-adapters (`zip:`, `zarr2:`/`zarr3:`) are under development and will expand this
-section. URLs without a `|` (and without a registered root scheme) are handled
-exactly as before.
+[`zarr.abc.url_pipeline`][zarr.abc.url_pipeline] for the adapter interface. A builtin
+`zip:` adapter is under development and will expand this section.
 
-`storage_options` passed to `zarr.open` apply to the *root* sub-URL (e.g. fsspec
-options for `s3://...`); adapters may consume adapter-specific, namespaced keys.
-Non-dict forms of `storage_options` are reserved for future per-segment
-configuration.
+A parsed [`URLPipeline`][zarr.storage.URLPipeline] can be passed to any function that
+accepts a `StoreLike`, and [`zarr.open_url`][] opens the *existing* node a pipeline
+string addresses, read-only unless `mode="r+"` is given:
 
-The `|` character is reserved as the pipeline delimiter in every string store
-specification, and no percent-escape is decoded: to address a local file whose
-*name* contains `|` (or `#`), pass a `pathlib.Path` instead of a string.
-Registered adapters cannot intercept zarr's native `file:` and `memory:` root
-schemes, and fsspec's chained-URL syntax (`zip::s3://...`) keeps flowing to
-fsspec.
+```python exec="true" session="storage" source="above" result="ansi"
+from zarr.storage import URLPipeline
+
+pipeline = URLPipeline.from_url("memory://pipeline-demo|zarr2:")
+group = zarr.open_group(pipeline, mode="w")
+print(group.metadata.zarr_format)
+# the same thing, as a one-liner
+print(zarr.open_url("memory://pipeline-demo|zarr2:").metadata.zarr_format)
+```
+
+Only these two entry points read a string as a pipeline. Plain string store
+specifications keep their existing meaning everywhere else, so a local path that
+happens to contain `|` still names a directory, whatever adapters are installed.
+Unlike `zarr.open`, `zarr.open_url` never creates or overwrites: to create a node at a
+pipeline-addressed location, pass the `URLPipeline` to `zarr.create_array` or
+`zarr.create_group`.
+
+A trailing `zarr2:` or `zarr3:` segment is a *format segment*. It is not an adapter:
+zarr-python reads it from the pipeline itself and uses it as the `zarr_format` of the
+open or create call, and its body (`zarr3:path/to/node`) is the path of the node to
+open. A `zarr_format` argument that conflicts with the format segment raises
+`ValueError`; functions whose `zarr_format` defaults to 3 (such as `zarr.create_array`
+and `Group.open`) need an explicit `zarr_format=None` to defer to the pipeline.
+
+`storage_options` apply to the *root* sub-URL (e.g. fsspec options for `s3://...`);
+adapters may consume adapter-specific, namespaced keys. No percent-escape is decoded
+anywhere in a pipeline. Registered adapters cannot intercept zarr's native `file:` and
+`memory:` root schemes.
 
 Inside a pipeline, a `memory:` root is zarr's managed in-memory store (`memory:`,
 `memory:/` and `memory://` are equivalent, and `memory:name` selects a named store).
-When fsspec is installed, a plain `memory://name` URL *without* a `|` is still routed to
-fsspec's in-memory filesystem, which is a different store. A `file:` root must carry an
-absolute path; percent-escapes are not decoded, matching the [local store](#local-store).
+When fsspec is installed, a plain `memory://name` string store specification is still
+routed to fsspec's in-memory filesystem, which is a different store. A `file:` root
+must carry an absolute path; percent-escapes are not decoded, matching the
+[local store](#local-store). The root always carries a scheme: a local path is spelled
+as a `file:` URL, never as a bare path.
 
 ## Explicit Store Creation
 

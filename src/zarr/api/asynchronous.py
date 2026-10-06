@@ -48,7 +48,7 @@ from zarr.errors import (
     ZarrUserWarning,
 )
 from zarr.storage import StorePath
-from zarr.storage._common import make_store_path
+from zarr.storage._common import make_store_path, resolve_zarr_format
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -88,6 +88,7 @@ __all__ = [
     "open_consolidated",
     "open_group",
     "open_like",
+    "open_url",
     "save",
     "save_array",
     "save_group",
@@ -403,8 +404,8 @@ async def open(
             mode = "r"
         else:
             mode = "a"
+    zarr_format = resolve_zarr_format(store, zarr_format)
     store_path = await make_store_path(store, mode=mode, path=path, storage_options=storage_options)
-    zarr_format = store_path.resolve_zarr_format(zarr_format)
 
     # TODO: the mode check below seems wrong!
     if "shape" not in kwargs and mode in (*_READ_MODES, "w"):
@@ -434,6 +435,59 @@ async def open(
         # NodeTypeValidationError for failing to parse node metadata as an array when it's
         # actually a group
         return await open_group(store=store_path, zarr_format=zarr_format, mode=mode, **kwargs)
+
+
+async def open_url(
+    url: str,
+    *,
+    mode: Literal["r", "r+"] = "r",
+    storage_options: dict[str, Any] | None = None,
+) -> AnyAsyncArray | AsyncGroup:
+    """Open the existing group or array addressed by a URL pipeline.
+
+    This is the only entry point that reads a string as a
+    [URL pipeline][user-guide-url-pipelines]; [`open`][zarr.api.asynchronous.open] and the other
+    `StoreLike`-taking functions treat strings as they always have. Unlike
+    `open`, `open_url` never creates or overwrites anything: to create a node at
+    a pipeline-addressed location, pass a `URLPipeline` to
+    [`create_array`][zarr.api.asynchronous.create_array] or
+    [`create_group`][zarr.api.asynchronous.create_group].
+
+    The zarr format is taken from a trailing `zarr2:`/`zarr3:` segment when
+    present, and inferred from the stored metadata otherwise.
+
+    Parameters
+    ----------
+    url : str
+        A URL pipeline such as `"s3://bucket/data.zip|zip:|zarr3:"`. A URL
+        without `|` is a trivial pipeline consisting of its root alone. The
+        node to open is addressed by the URL itself: the body of a trailing
+        `zarr2:`/`zarr3:` segment is the path of the node within the store.
+    mode : {'r', 'r+'}, optional
+        `'r'` (the default) opens read-only; `'r+'` opens for reading and
+        writing. The node must exist in either case.
+    storage_options : dict, optional
+        Options for the pipeline's root sub-URL (e.g. fsspec options).
+
+    Returns
+    -------
+    z : array or group
+        Return type depends on what exists at the URL. For a statically typed
+        result, pass a `URLPipeline` to `open_array` or `open_group` instead.
+    """
+    from zarr.storage import URLPipeline
+
+    if mode not in ("r", "r+"):
+        raise ValueError(
+            f"Invalid mode: {mode!r}. open_url opens existing nodes only and accepts "
+            "'r' or 'r+'; to create a node at a URL pipeline, pass "
+            "URLPipeline.from_url(url) to create_array or create_group."
+        )
+    return await open(
+        store=URLPipeline.from_url(url),
+        mode=mode,
+        storage_options=storage_options,
+    )
 
 
 async def open_consolidated(
@@ -531,8 +585,8 @@ async def save_array(
         raise TypeError("arr argument must be numpy or other NDArrayLike array")
 
     mode = kwargs.pop("mode", "a")
+    zarr_format = resolve_zarr_format(store, zarr_format)
     store_path = await make_store_path(store, path=path, mode=mode, storage_options=storage_options)
-    zarr_format = store_path.resolve_zarr_format(zarr_format)
     if zarr_format is None:
         zarr_format = _default_zarr_format()
     if np.isscalar(arr):
@@ -600,8 +654,8 @@ async def save_group(
     for arr in (*args, *kwargs.values()):
         get_data_type_from_native_dtype(arr.dtype)
 
+    zarr_format = resolve_zarr_format(store, zarr_format)
     store_path = await make_store_path(store, path=path, mode="w", storage_options=storage_options)
-    zarr_format = store_path.resolve_zarr_format(zarr_format)
     if zarr_format is None:
         zarr_format = _default_zarr_format()
     # The group replaces whatever is stored under the path, now that the arguments are known
@@ -800,8 +854,8 @@ async def create_group(
 
     mode: Literal["a"] = "a"
 
+    zarr_format = resolve_zarr_format(store, zarr_format)
     store_path = await make_store_path(store, path=path, mode=mode, storage_options=storage_options)
-    zarr_format = store_path.resolve_zarr_format(zarr_format)
     if zarr_format is None:
         zarr_format = _default_zarr_format()
 
@@ -893,8 +947,8 @@ async def open_group(
         }
     )
 
+    zarr_format = resolve_zarr_format(store, zarr_format)
     store_path = await make_store_path(store, mode=mode, storage_options=storage_options, path=path)
-    zarr_format = store_path.resolve_zarr_format(zarr_format)
     if attributes is None:
         attributes = {}
 
@@ -1119,8 +1173,8 @@ async def create(
     if mode is None:
         mode = "a"
     overwrite = overwrite or _infer_overwrite(mode)
+    zarr_format = resolve_zarr_format(store, zarr_format)
     store_path = await make_store_path(store, path=path, mode=mode, storage_options=storage_options)
-    zarr_format = store_path.resolve_zarr_format(zarr_format)
     if zarr_format is None:
         zarr_format = _default_zarr_format()
 
@@ -1336,8 +1390,8 @@ async def open_array(
     """
 
     mode = kwargs.pop("mode", None)
+    zarr_format = resolve_zarr_format(store, zarr_format)
     store_path = await make_store_path(store, path=path, mode=mode, storage_options=storage_options)
-    zarr_format = store_path.resolve_zarr_format(zarr_format)
 
     if "write_empty_chunks" in kwargs:
         _warn_write_empty_chunks_kwarg()
