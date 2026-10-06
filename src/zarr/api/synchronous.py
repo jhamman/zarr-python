@@ -250,54 +250,52 @@ def open(
 def open_url(
     url: str,
     *,
-    mode: AccessModeLiteral | None = None,
-    zarr_format: ZarrFormat | None = None,
-    path: str | None = None,
+    mode: Literal["r", "r+"] = "r",
     storage_options: dict[str, Any] | None = None,
-    **kwargs: Any,
 ) -> AnyArray | Group:
-    """Open a group or array addressed by a URL pipeline.
+    """Open the existing group or array addressed by a URL pipeline.
 
-    This is [`open`][zarr.open] with its `store` argument interpreted as a
-    [URL pipeline][user-guide-url-pipelines] string, i.e.
-    `zarr.open(URLPipeline.from_url(url), ...)`. It is the only entry point
-    that reads a string as a pipeline; `zarr.open` and the other
-    `StoreLike`-taking functions treat strings as they always have.
+    This is the only entry point that reads a string as a
+    [URL pipeline][user-guide-url-pipelines]; [`open`][zarr.open] and the other
+    `StoreLike`-taking functions treat strings as they always have. Unlike
+    `open`, `open_url` never creates or overwrites anything: to create a node at
+    a pipeline-addressed location, pass a `URLPipeline` to
+    [`create_array`][zarr.create_array] or [`create_group`][zarr.create_group].
+
+    The zarr format is taken from a trailing `zarr2:`/`zarr3:` segment when
+    present, and inferred from the stored metadata otherwise.
 
     Parameters
     ----------
     url : str
         A URL pipeline such as `"s3://bucket/data.zip|zip:|zarr3:"`. A URL
-        without `|` is a trivial pipeline consisting of its root alone.
-    mode : {'r', 'r+', 'a', 'w', 'w-'}, optional
-        Persistence mode, with the same meaning as for `zarr.open`.
-    zarr_format : {2, 3, None}, optional
-        The zarr format to use. None (the default) defers to a trailing
-        `zarr2:`/`zarr3:` segment of the pipeline; a value that conflicts
-        with such a segment raises `ValueError`.
-    path : str or None, optional
-        The path within the store to open, appended to any node path the
-        pipeline itself addresses.
-    storage_options : dict
+        without `|` is a trivial pipeline consisting of its root alone. The
+        node to open is addressed by the URL itself: the body of a trailing
+        `zarr2:`/`zarr3:` segment is the path of the node within the store.
+    mode : {'r', 'r+'}, optional
+        `'r'` (the default) opens read-only; `'r+'` opens for reading and
+        writing. The node must exist in either case.
+    storage_options : dict, optional
         Options for the pipeline's root sub-URL (e.g. fsspec options).
-    **kwargs
-        Additional parameters are passed through to `zarr.open_array` or
-        `zarr.open_group`.
 
     Returns
     -------
     z : array or group
-        Return type depends on what exists in the given store.
+        Return type depends on what exists at the URL. For a statically typed
+        result, pass a `URLPipeline` to `open_array` or `open_group` instead.
     """
     from zarr.storage import URLPipeline
 
+    if mode not in ("r", "r+"):
+        raise ValueError(
+            f"Invalid mode: {mode!r}. open_url opens existing nodes only and accepts "
+            "'r' or 'r+'; to create a node at a URL pipeline, pass "
+            "URLPipeline.from_url(url) to create_array or create_group."
+        )
     return open(
         store=URLPipeline.from_url(url),
         mode=mode,
-        zarr_format=zarr_format,
-        path=path,
         storage_options=storage_options,
-        **kwargs,
     )
 
 

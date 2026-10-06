@@ -815,30 +815,53 @@ class TestMakeStoreIntegration:
 
 
 class TestOpenURL:
-    """`zarr.open_url` interprets its string argument as a URL pipeline, and nothing else does."""
+    """
+    `zarr.open_url` interprets its string argument as a URL pipeline and opens
+    the existing node it addresses. It never creates: creation goes through
+    `create_array` / `create_group` with a `URLPipeline`.
+    """
 
-    async def test_open_url_resolves_pipeline_and_format(self, tmp_path: Path) -> None:
+    async def test_open_url_opens_existing_node_with_pipeline_format(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        group = zarr.open_url(f"{tmp_path}|wrap:|zarr2:", mode="w")
+        zarr.create_group(URLPipeline.from_url(f"{tmp_path}|wrap:|zarr2:"))
+        group = zarr.open_url(f"{tmp_path}|wrap:|zarr2:")
         assert isinstance(group, zarr.Group)
         assert group.metadata.zarr_format == 2
         assert isinstance(group.store, TracingStore)
+        assert group.read_only
 
-    async def test_open_url_path_and_kwargs_pass_through(self, tmp_path: Path) -> None:
+    async def test_open_url_format_segment_body_addresses_node(self, tmp_path: Path) -> None:
+        """The node path lives in the URL, as the body of the format segment."""
         register_url_adapter("wrap", WrapperAdapter)
-        array = zarr.open_url(
-            f"{tmp_path}|wrap:|zarr3:sub", path="x", mode="w", shape=(3,), dtype="i4"
+        zarr.create_array(
+            URLPipeline.from_url(f"{tmp_path}|wrap:"), name="sub/x", shape=(3,), dtype="i4"
         )
+        array = zarr.open_url(f"{tmp_path}|wrap:|zarr3:sub/x")
         assert isinstance(array, zarr.Array)
-        assert array.metadata.zarr_format == 3
         assert array.store_path.path == "sub/x"
 
-    async def test_open_url_conflicting_format_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="conflicts with"):
-            zarr.open_url(f"{tmp_path}|zarr2:", mode="w", zarr_format=3)
+    async def test_open_url_read_write(self, tmp_path: Path) -> None:
+        zarr.create_group(URLPipeline.from_url(f"{tmp_path}|zarr3:"))
+        group = zarr.open_url(f"{tmp_path}|zarr3:", mode="r+")
+        assert not group.read_only
+        group.attrs["answer"] = 42
+        assert zarr.open_url(f"{tmp_path}|zarr3:").attrs["answer"] == 42
+
+    async def test_open_url_missing_node_raises(self, tmp_path: Path) -> None:
+        """Nothing is created on open: a URL to a missing node is an error in every mode."""
+        with pytest.raises(FileNotFoundError):
+            zarr.open_url(f"{tmp_path}/missing|zarr3:")
+        with pytest.raises(FileNotFoundError):
+            zarr.open_url(f"{tmp_path}/missing|zarr3:", mode="r+")
+
+    async def test_open_url_rejects_create_modes(self, tmp_path: Path) -> None:
+        """The creating modes of `zarr.open` are not accepted."""
+        with pytest.raises(ValueError, match="opens existing nodes only"):
+            zarr.open_url(f"{tmp_path}|zarr3:", mode="a")  # type: ignore[arg-type]
 
     async def test_async_open_url(self, tmp_path: Path) -> None:
-        group = await zarr.api.asynchronous.open_url(f"{tmp_path}|zarr2:", mode="w")
+        zarr.create_group(URLPipeline.from_url(f"{tmp_path}|zarr2:"))
+        group = await zarr.api.asynchronous.open_url(f"{tmp_path}|zarr2:")
         assert group.metadata.zarr_format == 2
 
 

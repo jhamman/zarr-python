@@ -118,9 +118,9 @@ sub-URL locates a resource with a conventional URL; each subsequent sub-URL name
 [`zarr.abc.url_pipeline`][zarr.abc.url_pipeline] for the adapter interface. A builtin
 `zip:` adapter is under development and will expand this section.
 
-A pipeline is opened either with [`zarr.open_url`][], which is `zarr.open` with its
-string argument read as a pipeline, or by passing a parsed
-[`URLPipeline`][zarr.storage.URLPipeline] to any function that accepts a `StoreLike`:
+A parsed [`URLPipeline`][zarr.storage.URLPipeline] can be passed to any function that
+accepts a `StoreLike`, and [`zarr.open_url`][] opens the *existing* node a pipeline
+string addresses, read-only unless `mode="r+"` is given:
 
 ```python exec="true" session="storage" source="above" result="ansi"
 from zarr.storage import URLPipeline
@@ -135,6 +135,9 @@ print(zarr.open_url("memory://pipeline-demo|zarr2:").metadata.zarr_format)
 Only these two entry points read a string as a pipeline. Plain string store
 specifications keep their existing meaning everywhere else, so a local path that
 happens to contain `|` still names a directory, whatever adapters are installed.
+Unlike `zarr.open`, `zarr.open_url` never creates or overwrites: to create a node at a
+pipeline-addressed location, pass the `URLPipeline` to `zarr.create_array` or
+`zarr.create_group`.
 
 A trailing `zarr2:` or `zarr3:` segment is a *format segment*. It is not an adapter:
 zarr-python reads it from the pipeline itself and uses it as the `zarr_format` of the
