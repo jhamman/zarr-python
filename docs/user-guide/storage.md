@@ -135,9 +135,25 @@ print(zarr.open_url("memory://pipeline-demo|zarr2:").metadata.zarr_format)
 Only these two entry points read a string as a pipeline. Plain string store
 specifications keep their existing meaning everywhere else, so a local path that
 happens to contain `|` still names a directory, whatever adapters are installed.
-Unlike `zarr.open`, `zarr.open_url` never creates or overwrites: to create a node at a
-pipeline-addressed location, pass the `URLPipeline` to `zarr.create_array` or
-`zarr.create_group`.
+Unlike `zarr.open`, `zarr.open_url` never creates or overwrites. To create a node at a
+pipeline-addressed location, use [`zarr.create_v3_array`][] or [`zarr.create_v3_group`][],
+which read a string location as a pipeline and take the Zarr V3 metadata fields as keyword
+arguments, or pass the `URLPipeline` to `zarr.create_array` / `zarr.create_group`:
+
+```python exec="true" session="storage" source="above" result="ansi"
+arr = zarr.create_v3_array(
+    "memory://pipeline-demo|zarr3:temperature",
+    shape=(365, 180, 360),
+    data_type="float32",
+    chunk_grid=(30, 180, 360),
+    dimension_names=("time", "lat", "lon"),
+)
+print(arr)
+print(zarr.open_url("memory://pipeline-demo|zarr3:temperature").metadata.dimension_names)
+```
+
+In these functions a string is *always* a pipeline, so its root must carry a URL scheme and
+a literal `|` in a local path is spelled `%7C`, as in `file:/data/a%7Cb.zarr`.
 
 A trailing `zarr2:` or `zarr3:` segment is a *format segment*. It is not an adapter:
 zarr-python reads it from the pipeline itself and uses it as the `zarr_format` of the
@@ -147,16 +163,16 @@ open. A `zarr_format` argument that conflicts with the format segment raises
 and `Group.open`) need an explicit `zarr_format=None` to defer to the pipeline.
 
 `storage_options` apply to the *root* sub-URL (e.g. fsspec options for `s3://...`);
-adapters may consume adapter-specific, namespaced keys. No percent-escape is decoded
-anywhere in a pipeline. Registered adapters cannot intercept zarr's native `file:` and
-`memory:` root schemes.
+adapters may consume adapter-specific, namespaced keys. Percent-escapes are decoded in
+zarr's native `file:` and `memory:` roots, as in any URL; adapter segments receive their
+bodies verbatim. Registered adapters cannot intercept zarr's native `file:` and `memory:`
+root schemes.
 
 Inside a pipeline, a `memory:` root is zarr's managed in-memory store (`memory:`,
 `memory:/` and `memory://` are equivalent, and `memory:name` selects a named store).
 When fsspec is installed, a plain `memory://name` string store specification is still
 routed to fsspec's in-memory filesystem, which is a different store. A `file:` root
-must carry an absolute path; percent-escapes are not decoded, matching the
-[local store](#local-store). The root always carries a scheme: a local path is spelled
+must carry an absolute path. The root always carries a scheme: a local path is spelled
 as a `file:` URL, never as a bare path.
 
 ## Explicit Store Creation

@@ -7,6 +7,7 @@ from typing_extensions import deprecated
 import zarr.api.asynchronous as async_api
 import zarr.core.array
 from zarr.core.array import DEFAULT_FILL_VALUE, Array, AsyncArray, CompressorLike
+from zarr.core.common import AUTO
 from zarr.core.group import Group
 from zarr.core.sync import sync
 from zarr.core.sync_group import create_hierarchy
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
     from zarr.abc.codec import Codec
     from zarr.abc.numcodec import Numcodec
+    from zarr.abc.store import Store
     from zarr.api.asynchronous import ArrayLike, PathLike
     from zarr.core.array import (
         CompressorsLike,
@@ -36,11 +38,13 @@ if TYPE_CHECKING:
         ChunksLike,
         DimensionNamesLike,
         MemoryOrder,
+        NamedConfig,
         ShapeLike,
         ZarrFormat,
     )
     from zarr.core.dtype import ZDTypeLike
-    from zarr.storage import StoreLike
+    from zarr.core.metadata.v3 import ArrayV3Metadata, ChunkGridLike
+    from zarr.storage import StoreLike, StorePath, URLPipeline
     from zarr.types import AnyArray
 
 __all__ = [
@@ -52,6 +56,8 @@ __all__ = [
     "create",
     "create_array",
     "create_hierarchy",
+    "create_v3_array",
+    "create_v3_group",
     "empty",
     "empty_like",
     "from_array",
@@ -245,6 +251,143 @@ def open(
         return Array(obj)
     else:
         return Group(obj)
+
+
+def create_v3_array(
+    location: str | URLPipeline | Store | StorePath,
+    *,
+    shape: ShapeLike,
+    data_type: ZDTypeLike,
+    chunk_grid: ChunkGridLike | AUTO = AUTO,
+    codecs: Iterable[Codec | dict[str, JSON] | NamedConfig[str, Any] | str] | AUTO = AUTO,
+    chunk_key_encoding: ChunkKeyEncodingLike | AUTO = AUTO,
+    fill_value: Any | AUTO = AUTO,
+    attributes: dict[str, JSON] | None = None,
+    dimension_names: DimensionNamesLike = None,
+    storage_transformers: Iterable[dict[str, JSON]] = (),
+    overwrite: bool = False,
+    storage_options: dict[str, Any] | None = None,
+) -> Array[ArrayV3Metadata]:
+    """Create a Zarr format 3 array at a URL pipeline or store location.
+
+    The keyword arguments are the fields of the Zarr V3 array metadata document;
+    this function does not abstract over Zarr formats. Fields left at
+    [`AUTO`][zarr.AUTO] are computed from the shape, the data type and the
+    configuration.
+
+    Parameters
+    ----------
+    location : str | URLPipeline | Store | StorePath
+        Where to create the array. A string is always read as a
+        [URL pipeline][user-guide-url-pipelines] whose root carries a URL scheme,
+        e.g. `"file:/data/example.zarr|zarr3:group/array"`: the body of a trailing
+        `zarr3:` segment is the path of the array within the store, and a literal
+        `|` in a local path is spelled `%7C`. A `URLPipeline` is the parsed form of
+        such a string. A `Store` addresses its root; a `StorePath` addresses a path
+        within a store. A `zarr2:` segment raises `ValueError`.
+    shape : tuple[int, ...]
+        Shape of the array.
+    data_type : ZDTypeLike
+        Data type of the array.
+    chunk_grid : ChunkGridLike | AUTO, optional
+        The chunk grid: a chunk shape (one integer per dimension) for a regular grid,
+        or a chunk grid metadata object or document. By default, a regular grid with
+        a chunk shape guessed from the shape and data type.
+    codecs : Iterable[Codec | dict[str, JSON]] | AUTO, optional
+        The codec chain, in order, from the first array-to-array codec to the last
+        bytes-to-bytes codec. By default, the default serializer for the data type
+        followed by the configured default compressors.
+    chunk_key_encoding : ChunkKeyEncodingLike | AUTO, optional
+        The chunk key encoding. By default, the `default` encoding with `/` as the
+        separator.
+    fill_value : Any | AUTO, optional
+        The fill value. By default, the data type's default scalar.
+    attributes : dict[str, JSON] | None, optional
+        User attributes. By default, empty.
+    dimension_names : Iterable[str | None] | None, optional
+        Dimension names. By default, the field is omitted from the metadata.
+    storage_transformers : Iterable[dict[str, JSON]], optional
+        Storage transformers. By default, none.
+    overwrite : bool, optional
+        If True, delete any existing node at the location before creating the array.
+        Otherwise an existing array or group raises `ContainsArrayError` or
+        `ContainsGroupError`.
+    storage_options : dict[str, Any] | None, optional
+        Options for the root sub-URL of a URL pipeline (e.g. fsspec options). Not
+        accepted together with a `Store` or `StorePath`.
+
+    Returns
+    -------
+    Array
+        The new array.
+    """
+    return Array(
+        sync(
+            async_api.create_v3_array(
+                location,
+                shape=shape,
+                data_type=data_type,
+                chunk_grid=chunk_grid,
+                codecs=codecs,
+                chunk_key_encoding=chunk_key_encoding,
+                fill_value=fill_value,
+                attributes=attributes,
+                dimension_names=dimension_names,
+                storage_transformers=storage_transformers,
+                overwrite=overwrite,
+                storage_options=storage_options,
+            )
+        )
+    )
+
+
+def create_v3_group(
+    location: str | URLPipeline | Store | StorePath,
+    *,
+    attributes: dict[str, JSON] | None = None,
+    overwrite: bool = False,
+    storage_options: dict[str, Any] | None = None,
+) -> Group:
+    """Create a Zarr format 3 group at a URL pipeline or store location.
+
+    The keyword arguments are the fields of the Zarr V3 group metadata document;
+    this function does not abstract over Zarr formats.
+
+    Parameters
+    ----------
+    location : str | URLPipeline | Store | StorePath
+        Where to create the group. A string is always read as a
+        [URL pipeline][user-guide-url-pipelines] whose root carries a URL scheme,
+        e.g. `"file:/data/example.zarr|zarr3:group"`: the body of a trailing
+        `zarr3:` segment is the path of the group within the store, and a literal
+        `|` in a local path is spelled `%7C`. A `URLPipeline` is the parsed form of
+        such a string. A `Store` addresses its root; a `StorePath` addresses a path
+        within a store. A `zarr2:` segment raises `ValueError`.
+    attributes : dict[str, JSON] | None, optional
+        User attributes. By default, empty.
+    overwrite : bool, optional
+        If True, delete any existing node at the location before creating the group.
+        Otherwise an existing array or group raises `ContainsArrayError` or
+        `ContainsGroupError`.
+    storage_options : dict[str, Any] | None, optional
+        Options for the root sub-URL of a URL pipeline (e.g. fsspec options). Not
+        accepted together with a `Store` or `StorePath`.
+
+    Returns
+    -------
+    Group
+        The new group.
+    """
+    return Group(
+        sync(
+            async_api.create_v3_group(
+                location,
+                attributes=attributes,
+                overwrite=overwrite,
+                storage_options=storage_options,
+            )
+        )
+    )
 
 
 def open_url(
