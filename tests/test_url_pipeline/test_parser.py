@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sys
-
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -19,11 +17,11 @@ def test_single_root_url() -> None:
     assert str(segment) == "s3://bucket/key"
 
 
-def test_schemeless_root() -> None:
-    (segment,) = parse_pipeline("/local/path")
-    assert segment.scheme == ""
-    assert segment.body == "/local/path"
-    assert segment.raw == "/local/path"
+@pytest.mark.parametrize("url", ["/local/path", "/local/path|zip:", "\tfile:/tmp/x|zip:"])
+def test_schemeless_root_rejected(url: str) -> None:
+    """The root sub-URL must carry a URL scheme; a bare path (or anything urlparse would not read as a scheme) is an error."""
+    with pytest.raises(URLPipelineError, match="URL scheme"):
+        parse_pipeline(url)
 
 
 def test_adapter_chain() -> None:
@@ -74,16 +72,12 @@ def test_empty_query() -> None:
     assert segment.query == ""
 
 
-def test_windows_drive_path_is_not_a_scheme() -> None:
-    # On Windows parse_store_url treats C:\... as a local path; elsewhere the
-    # single-letter scheme is preserved but must not crash the parser.
+def test_single_letter_scheme_is_a_scheme_everywhere() -> None:
+    """A drive-letter-like prefix is a URL scheme on every platform; bare Windows paths are not pipelines."""
     (segment,) = parse_pipeline(r"C:\data\store")
+    assert segment.scheme == "c"
+    assert segment.body == r"\data\store"
     assert segment.raw == r"C:\data\store"
-    if sys.platform == "win32":
-        assert segment.scheme == ""
-        assert segment.body == r"C:\data\store"
-    else:
-        assert segment.scheme == "c"
 
 
 @pytest.mark.parametrize("url", ["a||b:", "|zip:", "file:/tmp|", ""])
@@ -104,37 +98,10 @@ def test_invalid_adapter_scheme_rejected(segment: str) -> None:
 
 
 def test_single_letter_scheme_with_exotic_authority() -> None:
-    # single-letter candidates are delegated to parse_store_url, which may
-    # reject an exotic authority; the raw scheme is used as the fallback
+    """Scheme detection works on the raw text, so an authority urlparse would reject is no obstacle."""
     segments = parse_pipeline("x://[authority]/path|zip:")
-    assert segments[0].scheme in ("", "x")
+    assert segments[0].scheme == "x"
     assert segments[0].raw == "x://[authority]/path"
-
-
-def test_fsspec_chained_root_is_opaque() -> None:
-    # fsspec's ``scheme::`` chaining is not pipeline syntax; such roots are
-    # schemeless/opaque and flow through the ordinary store machinery
-    (segment,) = parse_pipeline("zip::file:///tmp/data.zip")
-    assert segment.scheme == ""
-    assert segment.body == "zip::file:///tmp/data.zip"
-
-
-def test_whitespace_prefixed_root_is_opaque() -> None:
-    # urlparse strips leading whitespace when sniffing a scheme; the parser
-    # must not, or the detected scheme desyncs from the body slice
-    segments = parse_pipeline("\tfile:/tmp/x|zip:")
-    assert segments[0].scheme == ""
-    assert segments[0].body == "\tfile:/tmp/x"
-
-
-def test_schemeless_root_keeps_query_and_fragment_chars() -> None:
-    # ? and # are ordinary filename characters in a bare local path
-    segments = parse_pipeline("/tmp/d?v=1|zip:")
-    assert segments[0].scheme == ""
-    assert segments[0].body == "/tmp/d?v=1"
-    assert segments[0].query is None
-    segments = parse_pipeline("/tmp/d#frag|zip:")
-    assert segments[0].body == "/tmp/d#frag"
 
 
 def test_round_trip() -> None:
@@ -160,9 +127,6 @@ _ADAPTER_SCHEME = st.from_regex(r"[a-zA-Z][a-zA-Z0-9+.\-]{0,15}", fullmatch=True
 # the root scheme as a local path on one platform but not another
 _ROOT_SCHEME = st.from_regex(r"[a-zA-Z]{2}[a-zA-Z0-9+.\-]{0,14}", fullmatch=True)
 _BODY = st.text(st.characters(min_codepoint=32, max_codepoint=126, exclude_characters="|#?"))
-# a root body starting with ":" would spell fsspec's chained-URL syntax
-# ("scheme::..."), which the parser deliberately treats as an opaque root
-_ROOT_BODY = _BODY.filter(lambda body: not body.startswith(":"))
 _QUERY = st.text(st.characters(min_codepoint=32, max_codepoint=126, exclude_characters="|#"))
 
 
@@ -176,7 +140,7 @@ def pipelines(
     parts = []
     for index in range(depth):
         scheme = draw(_ROOT_SCHEME if index == 0 else _ADAPTER_SCHEME)
-        body = draw(_ROOT_BODY if index == 0 else _BODY)
+        body = draw(_BODY)
         query = draw(st.none() | _QUERY)
         raw = f"{scheme}:{body}" + (f"?{query}" if query is not None else "")
         parts.append(raw)

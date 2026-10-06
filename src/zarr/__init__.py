@@ -13,6 +13,10 @@ from zarr.api.synchronous import (
     create_array,
     create_group,
     create_hierarchy,
+    create_v2_array,
+    create_v2_group,
+    create_v3_array,
+    create_v3_group,
     empty,
     empty_like,
     from_array,
@@ -27,6 +31,7 @@ from zarr.api.synchronous import (
     open_consolidated,
     open_group,
     open_like,
+    open_url,
     save,
     save_array,
     save_group,
@@ -35,6 +40,7 @@ from zarr.api.synchronous import (
     zeros_like,
 )
 from zarr.core.array import Array, AsyncArray
+from zarr.core.common import AUTO
 from zarr.core.config import config
 from zarr.core.group import AsyncGroup, Group
 
@@ -146,6 +152,7 @@ def set_format(log_format: str) -> None:
 
 
 __all__ = [
+    "AUTO",
     "Array",
     "AsyncArray",
     "AsyncGroup",
@@ -161,6 +168,10 @@ __all__ = [
     "create_array",
     "create_group",
     "create_hierarchy",
+    "create_v2_array",
+    "create_v2_group",
+    "create_v3_array",
+    "create_v3_group",
     "empty",
     "empty_like",
     "from_array",
@@ -175,6 +186,7 @@ __all__ = [
     "open_consolidated",
     "open_group",
     "open_like",
+    "open_url",
     "print_debug_info",
     "save",
     "save_array",

@@ -17,11 +17,20 @@ from typing import (
 )
 
 import numpy as np
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, Sentinel
 
 from zarr.core.config import config as zarr_config
 from zarr.core.json_parse import convert, parse_field
 from zarr.errors import ZarrRuntimeWarning
+
+AUTO = Sentinel("AUTO")
+"""
+Sentinel for a metadata field that zarr-python computes when the caller does not
+specify it: for example a chunk grid guessed from the shape and data type, the
+default codecs for a data type, or a data type's default fill value. Unlike
+`None`, it never collides with a legitimate field value, so a parameter typed
+`X | AUTO` keeps `None` free to mean whatever the metadata gives it.
+"""
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator

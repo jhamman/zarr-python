@@ -62,6 +62,10 @@ nav:
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.create_array</code>': api/zarr/functions/create_array.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.create_group</code>': api/zarr/functions/create_group.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.create_hierarchy</code>': api/zarr/functions/create_hierarchy.md
+      - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.create_v2_array</code>': api/zarr/functions/create_v2_array.md
+      - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.create_v2_group</code>': api/zarr/functions/create_v2_group.md
+      - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.create_v3_array</code>': api/zarr/functions/create_v3_array.md
+      - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.create_v3_group</code>': api/zarr/functions/create_v3_group.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-module"></code> <code>zarr.dtype</code>': api/zarr/dtype.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.empty</code>': api/zarr/functions/empty.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.empty_like</code>': api/zarr/functions/empty_like.md
@@ -81,6 +85,7 @@ nav:
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.open_consolidated</code>': api/zarr/functions/open_consolidated.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.open_group</code>': api/zarr/functions/open_group.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.open_like</code>': api/zarr/functions/open_like.md
+      - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.open_url</code>': api/zarr/functions/open_url.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.print_debug_info</code>': api/zarr/functions/print_debug_info.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-module"></code> <code>zarr.registry</code>': api/zarr/registry.md
       - '<code class="doc-symbol doc-symbol-toc doc-symbol-function"></code> <code>zarr.save</code>': api/zarr/functions/save.md
