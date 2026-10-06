@@ -50,8 +50,7 @@ class PipelineSegment:
     Attributes
     ----------
     scheme : str
-        The lowercased URL scheme. Empty string only for a schemeless root
-        (a bare local path), which is treated as opaque text.
+        The lowercased URL scheme.
     body : str
         The text after `scheme:` and before any `?`. Interpretation is
         scheme-defined; it is **not** URL-normalized, so case-significant
@@ -130,10 +129,6 @@ class PipelineContext:
         backends. An adapter that consumes keys should strip them before
         resolving the rest of the pipeline, by passing the reduced mapping
         to [`resolve_preceding`][zarr.abc.url_pipeline.PipelineContext.resolve_preceding].
-        Non-dict forms of the caller-facing `storage_options` argument are
-        reserved for future per-segment configuration (one mapping per
-        pipeline segment); this attribute will remain a single mapping —
-        the one addressed to this adapter's segment.
     """
 
     preceding: tuple[PipelineSegment, ...]

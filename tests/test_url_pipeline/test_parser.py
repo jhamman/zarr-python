@@ -19,11 +19,11 @@ def test_single_root_url() -> None:
     assert str(segment) == "s3://bucket/key"
 
 
-def test_schemeless_root() -> None:
-    (segment,) = parse_pipeline("/local/path")
-    assert segment.scheme == ""
-    assert segment.body == "/local/path"
-    assert segment.raw == "/local/path"
+@pytest.mark.parametrize("url", ["/local/path", "/local/path|zip:", "\tfile:/tmp/x|zip:"])
+def test_schemeless_root_rejected(url: str) -> None:
+    """The root sub-URL must carry a URL scheme; a bare path (or anything urlparse would not read as a scheme) is an error."""
+    with pytest.raises(URLPipelineError, match="URL scheme"):
+        parse_pipeline(url)
 
 
 def test_adapter_chain() -> None:
@@ -111,32 +111,6 @@ def test_single_letter_scheme_with_exotic_authority() -> None:
     assert segments[0].raw == "x://[authority]/path"
 
 
-def test_fsspec_chained_root_is_opaque() -> None:
-    # fsspec's ``scheme::`` chaining is not pipeline syntax; such roots are
-    # schemeless/opaque and flow through the ordinary store machinery
-    (segment,) = parse_pipeline("zip::file:///tmp/data.zip")
-    assert segment.scheme == ""
-    assert segment.body == "zip::file:///tmp/data.zip"
-
-
-def test_whitespace_prefixed_root_is_opaque() -> None:
-    # urlparse strips leading whitespace when sniffing a scheme; the parser
-    # must not, or the detected scheme desyncs from the body slice
-    segments = parse_pipeline("\tfile:/tmp/x|zip:")
-    assert segments[0].scheme == ""
-    assert segments[0].body == "\tfile:/tmp/x"
-
-
-def test_schemeless_root_keeps_query_and_fragment_chars() -> None:
-    # ? and # are ordinary filename characters in a bare local path
-    segments = parse_pipeline("/tmp/d?v=1|zip:")
-    assert segments[0].scheme == ""
-    assert segments[0].body == "/tmp/d?v=1"
-    assert segments[0].query is None
-    segments = parse_pipeline("/tmp/d#frag|zip:")
-    assert segments[0].body == "/tmp/d#frag"
-
-
 def test_round_trip() -> None:
     url = "s3://bucket/a.zip?v=2|zip:b/inner.zip|zip:c|zarr3:"
     segments = parse_pipeline(url)
@@ -160,9 +134,6 @@ _ADAPTER_SCHEME = st.from_regex(r"[a-zA-Z][a-zA-Z0-9+.\-]{0,15}", fullmatch=True
 # the root scheme as a local path on one platform but not another
 _ROOT_SCHEME = st.from_regex(r"[a-zA-Z]{2}[a-zA-Z0-9+.\-]{0,14}", fullmatch=True)
 _BODY = st.text(st.characters(min_codepoint=32, max_codepoint=126, exclude_characters="|#?"))
-# a root body starting with ":" would spell fsspec's chained-URL syntax
-# ("scheme::..."), which the parser deliberately treats as an opaque root
-_ROOT_BODY = _BODY.filter(lambda body: not body.startswith(":"))
 _QUERY = st.text(st.characters(min_codepoint=32, max_codepoint=126, exclude_characters="|#"))
 
 
@@ -176,7 +147,7 @@ def pipelines(
     parts = []
     for index in range(depth):
         scheme = draw(_ROOT_SCHEME if index == 0 else _ADAPTER_SCHEME)
-        body = draw(_ROOT_BODY if index == 0 else _BODY)
+        body = draw(_BODY)
         query = draw(st.none() | _QUERY)
         raw = f"{scheme}:{body}" + (f"?{query}" if query is not None else "")
         parts.append(raw)

@@ -31,8 +31,6 @@ from zarr.storage._url_pipeline import parse_pipeline
         ("memory://x|wrap:a", ("memory", "wrap"), ("memory", "wrap"), None, ""),
         # a single URL is a trivial pipeline
         ("s3://bucket/key", ("s3",), ("s3",), None, ""),
-        # schemeless local root (zarr-python extension)
-        ("/local/data.zip|zip:", ("", "zip"), ("", "zip"), None, ""),
     ],
 )
 def test_from_url(

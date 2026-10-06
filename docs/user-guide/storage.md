@@ -147,20 +147,17 @@ open. A `zarr_format` argument that conflicts with the format segment raises
 and `Group.open`) need an explicit `zarr_format=None` to defer to the pipeline.
 
 `storage_options` apply to the *root* sub-URL (e.g. fsspec options for `s3://...`);
-adapters may consume adapter-specific, namespaced keys. Non-dict forms of
-`storage_options` are reserved for future per-segment configuration. No percent-escape
-is decoded anywhere in a pipeline. Registered adapters cannot intercept zarr's native
-`file:` and `memory:` root schemes. With the default mode `"a"`, a pipeline that
-resolves to a read-only resource is opened for reading instead of raising.
+adapters may consume adapter-specific, namespaced keys. No percent-escape is decoded
+anywhere in a pipeline. Registered adapters cannot intercept zarr's native `file:` and
+`memory:` root schemes.
 
 Inside a pipeline, a `memory:` root is zarr's managed in-memory store (`memory:`,
 `memory:/` and `memory://` are equivalent, and `memory:name` selects a named store).
 When fsspec is installed, a plain `memory://name` string store specification is still
 routed to fsspec's in-memory filesystem, which is a different store. A `file:` root
 must carry an absolute path; percent-escapes are not decoded, matching the
-[local store](#local-store). As a zarr-python extension, the root may also be a bare
-local path (`data/example.zip|zip:`); such pipelines are not portable to other
-implementations.
+[local store](#local-store). The root always carries a scheme: a local path is spelled
+as a `file:` URL, never as a bare path.
 
 ## Explicit Store Creation
 

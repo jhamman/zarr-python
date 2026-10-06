@@ -353,10 +353,10 @@ class TestStringsAreNeverPipelines:
 class TestResolve:
     async def test_wrapper_adapter_chain(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"{tmp_path}|wrap:inner/path")
+        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:inner/path")
         assert isinstance(result.store, TracingStore)
         assert result.path == "inner/path"
-        assert result.store.context.preceding_url == str(tmp_path)
+        assert result.store.context.preceding_url == f"file:{tmp_path.as_posix()}"
         assert result.store.segment.scheme == "wrap"
         assert result.store.segment.body == "inner/path"
 
@@ -364,7 +364,7 @@ class TestResolve:
         # each wrapper joins the preceding residual path with its own, so
         # no segment's path is lost in root|wrap:a|wrap:b
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"{tmp_path}|wrap:a|wrap:b")
+        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:a|wrap:b")
         assert result.path == "a/b"
 
     async def test_native_adapter_gets_preceding_url(self) -> None:
@@ -395,11 +395,11 @@ class TestResolve:
 
     async def test_read_only_flag(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"{tmp_path}|wrap:", mode="r")
+        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:", mode="r")
         assert isinstance(result.store, TracingStore)
         assert result.store.context.read_only
         assert result.store.context.mode == "r"
-        result = await resolve_pipeline(f"{tmp_path}|wrap:")
+        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:")
         assert isinstance(result.store, TracingStore)
         assert not result.store.context.read_only
         assert result.store.context.mode is None
@@ -467,7 +467,7 @@ class TestResolve:
                 return dataclasses.replace(preceding, path=segment.body)
 
         register_url_adapter("rowrap", ReadOnlyRootWrapper)
-        result = await resolve_pipeline(f"{tmp_path}|rowrap:x", mode="w")
+        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|rowrap:x", mode="w")
         assert result.path == "x"
 
     async def test_wrapper_on_local_file_root_read_only(self, tmp_path: Path) -> None:
@@ -477,7 +477,7 @@ class TestResolve:
         target = tmp_path / "data.bin"
         target.write_bytes(b"payload")
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"{target}|wrap:", mode="r")
+        result = await resolve_pipeline(f"file:{target.as_posix()}|wrap:", mode="r")
         assert isinstance(result.store, TracingStore)
         assert result.store.read_only
 
@@ -496,7 +496,7 @@ class TestResolve:
         target = tmp_path / "data.bin"
         target.write_bytes(b"payload")
         register_url_adapter("wrap", WrapperAdapter)
-        await resolve_pipeline(f"{target}|wrap:", mode=mode)
+        await resolve_pipeline(f"file:{target.as_posix()}|wrap:", mode=mode)
 
     async def test_resolve_preceding_storage_options_override(self, tmp_path: Path) -> None:
         # an adapter that consumed its namespaced keys strips them before
@@ -517,7 +517,8 @@ class TestResolve:
         # the local-path root rejects any surviving storage_options, so this
         # passing proves the adapter's keys were stripped before resolution
         result = await resolve_pipeline(
-            f"{tmp_path}|consuming:x", storage_options={"consuming_secret": "s3cr3t"}
+            f"file:{tmp_path.as_posix()}|consuming:x",
+            storage_options={"consuming_secret": "s3cr3t"},
         )
         assert result.path == "x"
         assert ConsumingWrapper.seen == "s3cr3t"
@@ -555,14 +556,14 @@ class TestResolve:
     async def test_accepts_pipeline_object(self, tmp_path: Path) -> None:
         """`resolve_pipeline` takes a parsed `URLPipeline` as well as a string."""
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(URLPipeline.from_url(f"{tmp_path}|wrap:a"))
+        result = await resolve_pipeline(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:a"))
         assert isinstance(result.store, TracingStore)
         assert result.path == "a"
 
     async def test_format_segment_path_joins_residual_path(self, tmp_path: Path) -> None:
         """The node path of a trailing format segment extends the adapters' residual path."""
         register_url_adapter("wrap", WrapperAdapter)
-        result = await resolve_pipeline(f"{tmp_path}|wrap:a|zarr3:b")
+        result = await resolve_pipeline(f"file:{tmp_path.as_posix()}|wrap:a|zarr3:b")
         assert result.path == "a/b"
 
     async def test_unknown_adapter_scheme_raises(self) -> None:
@@ -692,7 +693,7 @@ class TestMakeStoreIntegration:
     async def test_make_store_path_combines_paths(self, tmp_path: Path) -> None:
         """Adapter residual path, format-segment node path and the caller's path join in order."""
         register_url_adapter("wrap", WrapperAdapter)
-        pipeline = URLPipeline.from_url(f"{tmp_path}|wrap:residual|zarr3:node")
+        pipeline = URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:residual|zarr3:node")
         store_path = await make_store_path(pipeline, path="user/sub")
         assert store_path.path == "residual/node/user/sub"
         assert isinstance(store_path.store, TracingStore)
@@ -700,13 +701,13 @@ class TestMakeStoreIntegration:
     async def test_make_store_rejects_residual_path(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(URLPipelineError, match="resolves to a path inside a store"):
-            await make_store(URLPipeline.from_url(f"{tmp_path}|wrap:residual"))
+            await make_store(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:residual"))
 
     async def test_make_store_rejects_format_segment_node_path(self, tmp_path: Path) -> None:
         """A node path given on the format segment also addresses a path inside the store."""
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(URLPipelineError, match="resolves to a path inside a store"):
-            await make_store(URLPipeline.from_url(f"{tmp_path}|wrap:|zarr3:node"))
+            await make_store(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:|zarr3:node"))
 
     async def test_make_store_rejects_slash_root_path(self, tmp_path: Path) -> None:
         # an adapter returning path="/" addresses the store root; the raw
@@ -720,7 +721,7 @@ class TestMakeStoreIntegration:
                 return dataclasses.replace(preceding, path="/")
 
         register_url_adapter("slashy", SlashRootAdapter)
-        store = await make_store(URLPipeline.from_url(f"{tmp_path}|slashy:"))
+        store = await make_store(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|slashy:"))
         assert store is not None
 
     async def test_make_store_closes_store_on_residual_path_error(self) -> None:
@@ -745,7 +746,7 @@ class TestMakeStoreIntegration:
 
     async def test_make_store_no_residual_path(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        store = await make_store(URLPipeline.from_url(f"{tmp_path}|wrap:"))
+        store = await make_store(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:"))
         assert isinstance(store, TracingStore)
 
     async def test_make_store_rejects_invalid_mode_before_resolving(self, tmp_path: Path) -> None:
@@ -753,30 +754,28 @@ class TestMakeStoreIntegration:
         # rather than being handed to adapters
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(ValueError, match="Invalid mode"):
-            await make_store(URLPipeline.from_url(f"{tmp_path}|wrap:"), mode="invalid")  # type: ignore[arg-type]
+            await make_store(
+                URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:"),
+                mode="invalid",  # type: ignore[arg-type]
+            )
 
     async def test_zarr_open_end_to_end(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        group = zarr.open_group(URLPipeline.from_url(f"{tmp_path}|wrap:"), mode="w")
+        group = zarr.open_group(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:"), mode="w")
         array = group.create_array("x", shape=(4,), dtype="i4")
         array[:] = [1, 2, 3, 4]
-        assert zarr.open_array(URLPipeline.from_url(f"{tmp_path}|wrap:x"))[2] == 3
+        assert zarr.open_array(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:x"))[2] == 3
 
     async def test_pipeline_store_read_only_mode(self) -> None:
         register_url_adapter("native", NativeAdapter)
         store_path = await make_store_path(URLPipeline.from_url("memory://base|native:"), mode="r")
         assert store_path.read_only
 
-    async def test_mode_a_downgrades_to_read_only_open(self) -> None:
-        # mode "a" (the zarr.open default) is open-or-create: a pipeline
-        # that resolves to a read-only store serves the "open" half instead
-        # of failing outright.
+    async def test_mode_a_on_read_only_store_raises(self) -> None:
+        """Mode "a" on a read-only store raises, whether the store comes from a pipeline or not."""
         register_url_adapter("rooty", RootAdapter)
-        store_path = await make_store_path(URLPipeline.from_url("rooty://org/repo"), mode="a")
-        assert store_path.read_only
-
-    async def test_mode_a_on_plain_read_only_store_still_raises(self) -> None:
-        """The open-or-create downgrade is specific to pipelines; plain stores behave as before."""
+        with pytest.raises(ValueError, match="Store is read-only but mode is 'a'"):
+            await make_store_path(URLPipeline.from_url("rooty://org/repo"), mode="a")
         store = await MemoryStore.open(read_only=True)
         with pytest.raises(ValueError, match="Store is read-only but mode is 'a'"):
             await make_store_path(store, mode="a")
@@ -793,24 +792,32 @@ class TestMakeStoreIntegration:
         register_url_adapter("wrap", WrapperAdapter)
         with pytest.raises(TypeError, match="'storage_options' was provided but unused"):
             await make_store(
-                URLPipeline.from_url("/tmp/some/path|wrap:"), storage_options={"anon": True}
+                URLPipeline.from_url("file:/tmp/some/path|wrap:"), storage_options={"anon": True}
             )
 
     async def test_store_path_has_no_format(self, tmp_path: Path) -> None:
         """The pipeline's format is consumed by the open call; it does not linger on the StorePath."""
-        store_path = await make_store_path(URLPipeline.from_url(f"{tmp_path}|zarr2:"))
+        store_path = await make_store_path(
+            URLPipeline.from_url(f"file:{tmp_path.as_posix()}|zarr2:")
+        )
         assert not hasattr(store_path, "zarr_format")
 
     async def test_zarr_format_merges_into_open(self, tmp_path: Path) -> None:
-        group = zarr.open_group(URLPipeline.from_url(f"{tmp_path}|zarr2:"), mode="w")
+        group = zarr.open_group(
+            URLPipeline.from_url(f"file:{tmp_path.as_posix()}|zarr2:"), mode="w"
+        )
         assert group.metadata.zarr_format == 2
 
     async def test_conflicting_explicit_format_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="conflicts with"):
-            zarr.open_group(URLPipeline.from_url(f"{tmp_path}|zarr2:"), mode="w", zarr_format=3)
+            zarr.open_group(
+                URLPipeline.from_url(f"file:{tmp_path.as_posix()}|zarr2:"), mode="w", zarr_format=3
+            )
 
     async def test_matching_explicit_format_ok(self, tmp_path: Path) -> None:
-        group = zarr.open_group(URLPipeline.from_url(f"{tmp_path}|zarr2:"), mode="w", zarr_format=2)
+        group = zarr.open_group(
+            URLPipeline.from_url(f"file:{tmp_path.as_posix()}|zarr2:"), mode="w", zarr_format=2
+        )
         assert group.metadata.zarr_format == 2
 
 
@@ -823,8 +830,8 @@ class TestOpenURL:
 
     async def test_open_url_opens_existing_node_with_pipeline_format(self, tmp_path: Path) -> None:
         register_url_adapter("wrap", WrapperAdapter)
-        zarr.create_group(URLPipeline.from_url(f"{tmp_path}|wrap:|zarr2:"))
-        group = zarr.open_url(f"{tmp_path}|wrap:|zarr2:")
+        zarr.create_group(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:|zarr2:"))
+        group = zarr.open_url(f"file:{tmp_path.as_posix()}|wrap:|zarr2:")
         assert isinstance(group, zarr.Group)
         assert group.metadata.zarr_format == 2
         assert isinstance(group.store, TracingStore)
@@ -834,34 +841,37 @@ class TestOpenURL:
         """The node path lives in the URL, as the body of the format segment."""
         register_url_adapter("wrap", WrapperAdapter)
         zarr.create_array(
-            URLPipeline.from_url(f"{tmp_path}|wrap:"), name="sub/x", shape=(3,), dtype="i4"
+            URLPipeline.from_url(f"file:{tmp_path.as_posix()}|wrap:"),
+            name="sub/x",
+            shape=(3,),
+            dtype="i4",
         )
-        array = zarr.open_url(f"{tmp_path}|wrap:|zarr3:sub/x")
+        array = zarr.open_url(f"file:{tmp_path.as_posix()}|wrap:|zarr3:sub/x")
         assert isinstance(array, zarr.Array)
         assert array.store_path.path == "sub/x"
 
     async def test_open_url_read_write(self, tmp_path: Path) -> None:
-        zarr.create_group(URLPipeline.from_url(f"{tmp_path}|zarr3:"))
-        group = zarr.open_url(f"{tmp_path}|zarr3:", mode="r+")
+        zarr.create_group(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|zarr3:"))
+        group = zarr.open_url(f"file:{tmp_path.as_posix()}|zarr3:", mode="r+")
         assert not group.read_only
         group.attrs["answer"] = 42
-        assert zarr.open_url(f"{tmp_path}|zarr3:").attrs["answer"] == 42
+        assert zarr.open_url(f"file:{tmp_path.as_posix()}|zarr3:").attrs["answer"] == 42
 
     async def test_open_url_missing_node_raises(self, tmp_path: Path) -> None:
         """Nothing is created on open: a URL to a missing node is an error in every mode."""
         with pytest.raises(FileNotFoundError):
-            zarr.open_url(f"{tmp_path}/missing|zarr3:")
+            zarr.open_url(f"file:{tmp_path.as_posix()}/missing|zarr3:")
         with pytest.raises(FileNotFoundError):
-            zarr.open_url(f"{tmp_path}/missing|zarr3:", mode="r+")
+            zarr.open_url(f"file:{tmp_path.as_posix()}/missing|zarr3:", mode="r+")
 
     async def test_open_url_rejects_create_modes(self, tmp_path: Path) -> None:
         """The creating modes of `zarr.open` are not accepted."""
         with pytest.raises(ValueError, match="opens existing nodes only"):
-            zarr.open_url(f"{tmp_path}|zarr3:", mode="a")  # type: ignore[arg-type]
+            zarr.open_url(f"file:{tmp_path.as_posix()}|zarr3:", mode="a")  # type: ignore[arg-type]
 
     async def test_async_open_url(self, tmp_path: Path) -> None:
-        zarr.create_group(URLPipeline.from_url(f"{tmp_path}|zarr2:"))
-        group = await zarr.api.asynchronous.open_url(f"{tmp_path}|zarr2:")
+        zarr.create_group(URLPipeline.from_url(f"file:{tmp_path.as_posix()}|zarr2:"))
+        group = await zarr.api.asynchronous.open_url(f"file:{tmp_path.as_posix()}|zarr2:")
         assert group.metadata.zarr_format == 2
 
 
@@ -875,7 +885,7 @@ class TestZarrFormatMergeInCore:
 
     @pytest.fixture
     def v2_pipeline(self, tmp_path: Path) -> URLPipeline:
-        return URLPipeline.from_url(f"{tmp_path}|zarr2:")
+        return URLPipeline.from_url(f"file:{tmp_path.as_posix()}|zarr2:")
 
     async def test_create_array(self, v2_pipeline: URLPipeline) -> None:
         arr = zarr.create_array(v2_pipeline, name="x", shape=(2,), dtype="i4", zarr_format=None)
@@ -904,7 +914,7 @@ class TestZarrFormatMergeInCore:
         group = zarr.Group.from_store(v2_pipeline, zarr_format=None)
         assert group.metadata.zarr_format == 2
         with pytest.raises(ValueError, match="conflicts with"):
-            zarr.Group.from_store(URLPipeline.from_url(f"{tmp_path}/other|zarr2:"))
+            zarr.Group.from_store(URLPipeline.from_url(f"file:{tmp_path.as_posix()}/other|zarr2:"))
 
     async def test_group_from_store_default_without_pipeline(self, tmp_path: Path) -> None:
         """The default format for plain stores is still 3, independent of the config default."""
@@ -921,7 +931,7 @@ class TestZarrFormatMergeInCore:
 
     async def test_array_open(self, v2_pipeline: URLPipeline, tmp_path: Path) -> None:
         zarr.create_array(v2_pipeline, name="x", shape=(2,), dtype="i4", zarr_format=None)
-        array_pipeline = URLPipeline.from_url(f"{tmp_path}|zarr2:x")
+        array_pipeline = URLPipeline.from_url(f"file:{tmp_path.as_posix()}|zarr2:x")
         arr = zarr.Array.open(array_pipeline, zarr_format=None)
         assert arr.metadata.zarr_format == 2
         with pytest.raises(ValueError, match="conflicts with"):
@@ -943,5 +953,8 @@ class TestZarrFormatMergeInCore:
         assert arr.metadata.zarr_format == 2
         with pytest.raises(ValueError, match="conflicts with"):
             await AsyncArray._create(
-                URLPipeline.from_url(f"{tmp_path}/o|zarr2:"), shape=(2,), dtype="i4", zarr_format=3
+                URLPipeline.from_url(f"file:{tmp_path.as_posix()}/o|zarr2:"),
+                shape=(2,),
+                dtype="i4",
+                zarr_format=3,
             )

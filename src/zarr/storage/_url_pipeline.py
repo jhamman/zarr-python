@@ -11,12 +11,8 @@ and that object is what the `StoreLike` machinery resolves. Plain string
 store specifications, including local paths that happen to contain `|`,
 keep their pre-existing meaning. No percent-escape is decoded.
 
-As a zarr-python extension to the specification (which requires the root
-sub-URL of an absolute pipeline to carry a scheme), the root sub-URL may be
-a schemeless local filesystem path, e.g. `data/example.zip|zip:`. Schemeless
-roots are treated as opaque text — no query or fragment splitting is applied
-to them. Such pipelines are not portable to other URL pipeline
-implementations; portable pipelines should spell the root as a `file:` URL.
+As the specification requires, the root sub-URL carries a URL scheme: a
+local path is spelled as an absolute `file:` URL.
 """
 
 from __future__ import annotations
@@ -50,10 +46,8 @@ _FORMAT_SCHEMES: dict[str, ZarrFormat] = {"zarr2": 2, "zarr3": 3}
 # nonstandard schemes (e.g. "earthmover.myscheme").
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*$")
 
-# Root scheme at the very start of the sub-URL. The negative lookahead
-# excludes fsspec's chained-URL syntax (``zip::file://...``), which is not a
-# URL pipeline and keeps flowing through the fsspec machinery.
-_ROOT_SCHEME_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*):(?!:)")
+# Root scheme at the very start of the sub-URL.
+_ROOT_SCHEME_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*):")
 
 # Schemes zarr resolves natively at the pipeline root. These are never
 # dispatched to a registered root adapter, so an installed package cannot
@@ -67,12 +61,12 @@ _WINDOWS_DRIVE_RE = re.compile(r"[A-Za-z]:[/\\]")
 
 def _root_scheme(root_sub_url: str) -> str:
     """
-    Detect the scheme of the root sub-URL, or `""` for an opaque root.
+    Detect the scheme of the root sub-URL, or `""` when it has none.
 
-    Scheme extraction happens on the raw string (so nothing `urlparse`
-    would strip or reject — whitespace, exotic authorities — can desync the
-    detected scheme from the body). Single-letter candidates are delegated
-    to `parse_store_url`, which knows Windows drive letters are not schemes.
+    Scheme extraction happens on the raw string, so nothing `urlparse`
+    would strip or reject can desync the detected scheme from the body.
+    Single-letter candidates are delegated to `parse_store_url`, which
+    knows Windows drive letters are not schemes.
     """
     match = _ROOT_SCHEME_RE.match(root_sub_url)
     if match is None:
@@ -107,10 +101,9 @@ def parse_pipeline(url: str) -> tuple[PipelineSegment, ...]:
     `scheme:body` where the trailing colon is optional when the body is
     empty (`zip` is equivalent to `zip:`).
 
-    A schemeless root (a bare local path) is accepted as a zarr-python
-    extension to the specification and treated as opaque text: no query or
-    fragment splitting applies, since `?` and `#` are ordinary filename
-    characters there. See the module docstring.
+    The root must carry a scheme; a bare local path is rejected, since the
+    specification has no schemeless sub-URLs and `|` could not be escaped
+    in one.
 
     Segment text is preserved verbatim (no case or percent-encoding
     normalization) except that schemes are lowercased.
@@ -124,9 +117,11 @@ def parse_pipeline(url: str) -> tuple[PipelineSegment, ...]:
         if index == 0:
             scheme = _root_scheme(part)
             if not scheme:
-                # opaque root (bare local path, fsspec chained URL, ...)
-                segments.append(PipelineSegment(scheme="", body=part, query=None, raw=part))
-                continue
+                raise URLPipelineError(
+                    f"the root sub-URL {part!r} of the URL pipeline {url!r} has no URL scheme. "
+                    "Spell a local path as an absolute 'file:' URL, and a literal '|' in "
+                    "it as '%7C'."
+                )
             body_and_scheme, query = _split_query(part)
             body = body_and_scheme[len(scheme) + 1 :]
             segments.append(PipelineSegment(scheme=scheme, body=body, query=query, raw=part))
@@ -279,13 +274,11 @@ class URLPipeline:
 def _root_routes_to_adapter(scheme: str) -> bool:
     """
     Whether a root sub-URL with this scheme is dispatched to a registered
-    root adapter. Schemes zarr resolves natively (`file:`, `memory:`) and
-    opaque roots are excluded; the registry check inspects entry-point
-    names only — no adapter code is imported here.
+    root adapter. Schemes zarr resolves natively (`file:`, `memory:`) are
+    excluded; the registry check inspects entry-point names only — no
+    adapter code is imported here.
     """
-    return (
-        bool(scheme) and scheme not in _NATIVE_ROOT_SCHEMES and scheme in list_url_adapter_schemes()
-    )
+    return scheme not in _NATIVE_ROOT_SCHEMES and scheme in list_url_adapter_schemes()
 
 
 async def resolve_pipeline(
@@ -313,8 +306,7 @@ async def resolve_pipeline(
         resolver enforces this on whatever the final adapter returns.
     storage_options : dict | None
         Options forwarded to the root sub-URL's store (and visible to
-        adapters via the context). Non-dict forms are reserved for future
-        per-segment configuration (one mapping per pipeline segment).
+        adapters via the context).
 
     Raises
     ------
@@ -388,8 +380,8 @@ async def _resolve_root(
 
     `memory:` and `file:` roots are resolved here with the URL pipeline
     spec's semantics (spelling equivalences, mandatory absolute `file:`
-    paths); everything else — bare local paths, fsspec URLs — delegates to
-    the existing `StoreLike` machinery unchanged.
+    paths); every other scheme (e.g. fsspec URLs) delegates to the existing
+    `StoreLike` machinery unchanged.
     """
     if segment.scheme == "memory":
         return _resolve_memory_root(segment, mode=mode, storage_options=storage_options)

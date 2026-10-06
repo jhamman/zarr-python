@@ -488,11 +488,6 @@ async def make_store_path(
     if isinstance(store_like, URLPipeline):
         result = await resolve_pipeline(store_like, mode=mode, storage_options=storage_options)
         combined_path = _join_paths([normalize_path(result.path), path_normalized])
-        if mode == "a" and result.store.read_only:
-            # "a" (open-or-create, the zarr.open default) on a pipeline that
-            # resolves to a read-only resource serves the "open" half; any
-            # later write fails at the store level.
-            mode = "r"
         return await StorePath.open(result.store, path=combined_path, mode=mode)
 
     if isinstance(store_like, StorePath):
