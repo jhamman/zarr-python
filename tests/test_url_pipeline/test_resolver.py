@@ -680,13 +680,21 @@ class TestSpecRoots:
         assert isinstance(piped, TracingStore)
         assert isinstance(piped._store, ManagedMemoryStore)
 
-    async def test_file_root_does_not_percent_decode(self, tmp_path: Path) -> None:
-        # documented divergence from RFC 8089: consistent with LocalStore, no
-        # percent-escape is decoded, so %20 names a literal directory
+    async def test_file_root_percent_decodes(self, tmp_path: Path) -> None:
+        """A `file:` root is a URL: `%20` is a space and `%7C` is the only spelling of a literal `|`."""
         register_url_adapter("wrap", WrapperAdapter)
-        await URLPipeline.from_url(f"file:{tmp_path.as_posix()}/a%20b|wrap:").resolve()
-        assert (tmp_path / "a%20b").is_dir()
-        assert not (tmp_path / "a b").exists()
+        await URLPipeline.from_url(f"file:{tmp_path.as_posix()}/a%20b%7Cc|wrap:").resolve()
+        assert (tmp_path / "a b|c").is_dir()
+        assert not (tmp_path / "a%20b%7Cc").exists()
+
+    async def test_memory_root_percent_decodes(self) -> None:
+        """A `memory:` root decodes percent-escapes in the store name like any URL."""
+        register_url_adapter("wrap", WrapperAdapter)
+        result = await URLPipeline.from_url("memory:a%20b|wrap:").resolve()
+        assert isinstance(result.store, TracingStore)
+        inner = result.store._store
+        assert isinstance(inner, ManagedMemoryStore)
+        assert inner._name == "a b"
 
 
 class TestMakeStoreIntegration:

@@ -9,7 +9,9 @@ A string is never interpreted as a pipeline on its own: the user wraps it
 in a [`URLPipeline`][zarr.storage.URLPipeline] (or calls `zarr.open_url`),
 and that object is what the `StoreLike` machinery resolves. Plain string
 store specifications, including local paths that happen to contain `|`,
-keep their pre-existing meaning. No percent-escape is decoded.
+keep their pre-existing meaning. Percent-escapes are decoded in zarr's
+native `file:` and `memory:` roots, so `%7C` spells a literal `|` in a
+local path; adapter segments receive their bodies verbatim.
 
 As the specification requires, the root sub-URL carries a URL scheme: a
 local path is spelled as an absolute `file:` URL.
@@ -20,6 +22,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 
 from zarr.abc.url_pipeline import (
     AdapterResolution,
@@ -370,8 +373,8 @@ async def _resolve_root(
 
     `memory:` and `file:` roots are resolved here with the URL pipeline
     spec's semantics (spelling equivalences, mandatory absolute `file:`
-    paths); every other scheme (e.g. fsspec URLs) delegates to the existing
-    `StoreLike` machinery unchanged.
+    paths, percent-escapes decoded); every other scheme (e.g. fsspec URLs)
+    delegates to the existing `StoreLike` machinery unchanged.
     """
     if segment.scheme == "memory":
         return _resolve_memory_root(segment, mode=mode, storage_options=storage_options)
@@ -383,7 +386,7 @@ async def _resolve_root(
         # forbidden; file: URLs carry no query.
         if segment.query is not None:
             raise URLPipelineError(f"'file:' pipeline roots do not accept a query: {segment.raw!r}")
-        body = segment.body
+        body = unquote(segment.body)
         if body.startswith("//"):
             authority, sep, rest = body[2:].partition("/")
             if authority not in ("", "localhost"):
@@ -430,5 +433,5 @@ def _resolve_memory_root(
             "'storage_options' was provided but unused. "
             "'storage_options' is only used when the store is passed as an FSSpec URI string.",
         )
-    name, _, path = segment.body.lstrip("/").partition("/")
+    name, _, path = unquote(segment.body).lstrip("/").partition("/")
     return ManagedMemoryStore(name=name, path=path, read_only=mode == "r")

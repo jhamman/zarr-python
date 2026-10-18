@@ -381,6 +381,12 @@ class RectilinearChunkGridMetadata(Metadata):
 
 ChunkGridMetadata = RegularChunkGridMetadata | RectilinearChunkGridMetadata
 
+type ChunkGridLike = ChunkGridMetadata | dict[str, JSON] | NamedConfig[str, Any] | Iterable[int]
+"""
+A chunk grid as a user may specify it: a chunk grid metadata object or document,
+or a chunk shape (one integer per dimension) for a regular grid.
+"""
+
 
 class RectilinearChunksDisabledError(ValueError):
     """Rectilinear chunk grids are used while the `array.rectilinear_chunks` flag is off."""

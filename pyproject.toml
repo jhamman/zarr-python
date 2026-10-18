@@ -159,7 +159,7 @@ dev = [
     {include-group = "remote-tests"},
     {include-group = "docs"},
     "universal-pathlib",
-    "mypy==2.3.1",
+    "mypy==2.4.0",
 ]
 
 [tool.coverage.report]
